@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Purpose: Install and verify the NVIDIA driver and CUDA toolkit on the G4 VM.
+# Usage: Installed as the GCE startup-script metadata hook by the VM manager.
 
 set -euo pipefail
 

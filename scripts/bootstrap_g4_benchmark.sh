@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Purpose: Install the project environment while leaving automatic benchmarks disabled.
+# Usage: Run as root on the G4 VM: sudo ./scripts/bootstrap_g4_benchmark.sh
 
 set -euo pipefail
 
@@ -12,5 +14,4 @@ UV_LINK_MODE=copy /usr/local/bin/uv sync --locked --no-dev
 install -m 0644 scripts/bfgs-benchmark.service \
     /etc/systemd/system/bfgs-benchmark.service
 systemctl daemon-reload
-systemctl enable bfgs-benchmark.service
-systemctl start --no-block bfgs-benchmark.service
+systemctl disable --now bfgs-benchmark.service

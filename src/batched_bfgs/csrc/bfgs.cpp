@@ -5,6 +5,7 @@
 
 std::vector<torch::Tensor> optimize_cuda(
     torch::Tensor starts,
+    std::int64_t objective,
     double c1,
     double c2,
     double tolerance,
@@ -18,6 +19,7 @@ std::vector<torch::Tensor> optimize_cuda(
 
 std::vector<torch::Tensor> optimize(
     torch::Tensor starts,
+    std::int64_t objective,
     double c1,
     double c2,
     double tolerance,
@@ -31,7 +33,13 @@ std::vector<torch::Tensor> optimize(
   TORCH_CHECK(starts.is_cuda(), "starts must be a CUDA tensor");
   TORCH_CHECK(starts.is_contiguous(), "starts must be contiguous");
   TORCH_CHECK(starts.dim() == 2, "starts must be rank two");
-  TORCH_CHECK(starts.size(1) == 2, "starts must have shape [batch, 2]");
+  TORCH_CHECK(
+      starts.size(1) == 2 || starts.size(1) == 16,
+      "starts must have shape [batch, 2] or [batch, 16]");
+  TORCH_CHECK(objective == 0 || objective == 1, "unknown objective");
+  TORCH_CHECK(
+      starts.size(1) == 16 || objective == 0,
+      "2D CUDA optimization supports only Rosenbrock");
   TORCH_CHECK(starts.size(0) > 0, "starts must contain a batch member");
   TORCH_CHECK(
       starts.scalar_type() == torch::kFloat32 ||
@@ -39,6 +47,7 @@ std::vector<torch::Tensor> optimize(
       "starts must use float32 or float64");
   return optimize_cuda(
       starts,
+      objective,
       c1,
       c2,
       tolerance,

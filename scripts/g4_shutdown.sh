@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Purpose: Record an interrupted benchmark before a G4 Spot VM stops.
+# Usage: Installed as the GCE shutdown-script metadata hook by the VM manager.
 
 set -euo pipefail
 

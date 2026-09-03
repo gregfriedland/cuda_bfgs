@@ -1,6 +1,7 @@
 """CLI contract for the GCP Spot VM launcher."""
 
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -11,7 +12,8 @@ class TestGcpLauncher:
         """Help exposes the requested project, region, account, and machine."""
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
-            ["bash", str(root / "scripts/manage_g4_spot_vm.sh"), "--help"],
+            [sys.executable, "-m", "scripts.manage_g4_spot_vm", "--help"],
+            cwd=root,
             check=True,
             capture_output=True,
             text=True,
@@ -27,9 +29,12 @@ class TestGcpLauncher:
     def test_create_command_is_spot_g4(self) -> None:
         """The create command uses the required G4 Spot safety contract."""
         root = Path(__file__).resolve().parents[1]
-        launcher = (root / "scripts/manage_g4_spot_vm.sh").read_text()
+        launcher_path = root / "scripts/manage_g4_spot_vm.py"
+        launcher = launcher_path.read_text()
+        assert launcher_path.stat().st_mode & 0o111
+        assert not (root / "scripts/manage_g4_spot_vm.sh").exists()
         required_arguments = (
-            'machine_type="g4-standard-48"',
+            'MACHINE_TYPE = "g4-standard-48"',
             "--boot-disk-type=hyperdisk-balanced",
             "--provisioning-model=SPOT",
             "--instance-termination-action=STOP",
@@ -39,10 +44,9 @@ class TestGcpLauncher:
         )
         for argument in required_arguments:
             assert argument in launcher
-        assert "boot_disk_size_gb=50" in launcher
-        assert "compute instances stop" in launcher
-        assert "compute instances start" in launcher
-        assert "shutdown-script=$shutdown_script" in launcher
+        assert "default=50" in launcher
+        assert '("create", "stop", "start")' in launcher
+        assert "shutdown-script={shutdown_script}" in launcher
 
     def test_remote_runner_has_durable_markers(self) -> None:
         """Startup and benchmark scripts persist explicit terminal state."""
@@ -56,4 +60,9 @@ class TestGcpLauncher:
         assert "RUNNING.json" in runner
         assert "DONE.json" in runner
         assert "FAILED.json" in runner
+        assert '"extended_rosenbrock|2"' in runner
+        assert '"extended_rosenbrock|16"' in runner
+        assert '"extended_powell|16"' in runner
+        assert "--objective" in runner
+        assert "--dimension" in runner
         assert "WantedBy=multi-user.target" in service

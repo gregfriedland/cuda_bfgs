@@ -1,31 +1,58 @@
 # Batched strong-Wolfe BFGS
 
-This repository compares three implementations of complete BFGS optimization
-for independent 2D Rosenbrock problems:
+This repository implements full BFGS with a strong-Wolfe line search using:
 
 1. A Python loop over batch members.
 2. Masked batched PyTorch tensor operations.
-3. One complete optimization per CUDA thread in a custom extension.
+3. One fused fixed-dimensional optimization per CUDA thread.
 
-The CUDA kernel duplicates the Rosenbrock value and gradient because device
-code cannot call a Python objective callback.
+The Python and PyTorch implementations accept arbitrary-dimensional analytic
+objectives. Included benchmarks are extended Rosenbrock, defined as independent
+two-variable blocks, and extended Powell singular, defined as independent
+four-variable blocks. The fused CUDA extension supports 2D Rosenbrock plus
+16D extended Rosenbrock and extended Powell through compiled objective kernels.
 
-## Local setup and CPU checks
+## Local setup
 
 ```bash
-/opt/homebrew/bin/uv sync --all-groups
-.venv/bin/python -m pytest -q tests/test_cpu_equivalence.py
+/opt/homebrew/bin/uv sync --locked --all-groups
 ```
+
+Run an extended Rosenbrock benchmark in 16 dimensions:
+
+```bash
+/opt/homebrew/bin/uv run --locked --no-sync bfgs-benchmark \
+  --objective extended_rosenbrock \
+  --dimension 16 \
+  --device cpu
+```
+
+Switch to the extended Powell singular strong-Wolfe stress case:
+
+```bash
+/opt/homebrew/bin/uv run --locked --no-sync bfgs-benchmark \
+  --objective extended_powell \
+  --dimension 16 \
+  --device cpu
+```
+
+Use `--device cuda` with either 16D objective to include its fused CUDA kernel.
 
 ## Local and remote CI checks
 
 ### Local checks
 
-The shared check script creates or updates `.venv` from `uv.lock`, then runs
-Ruff linting, Ruff's formatting check, and ty type checking:
+The shared check script updates `.venv` from `uv.lock`, then runs Ruff linting,
+Ruff's formatting check, and ty type checking:
 
 ```bash
 ./scripts/check.sh
+```
+
+Run the unit tests separately:
+
+```bash
+/opt/homebrew/bin/uv run --locked --no-sync pytest -q
 ```
 
 Enable the tracked pre-push hook once per clone:
@@ -37,51 +64,33 @@ git config core.hooksPath .githooks
 ### Remote checks
 
 GitHub Actions runs the same `./scripts/check.sh` command for every push and
-pull request. View the workflow and its results on the
+pull request. View results on the
 [Static checks Actions page](https://github.com/gregfriedland/cuda_bfgs/actions/workflows/static-checks.yml).
-
-To inspect recent runs from the command line:
 
 ```bash
 gh run list --workflow static-checks.yml --limit 5
 ```
 
-The local machine does not need CUDA for the CPU equivalence test. The complete
-three-way benchmark requires a CUDA development environment:
-
-```bash
-.venv/bin/python -m batched_bfgs.benchmark \
-  --batch_sizes 64 256 4096 65536 \
-  --repeats 5
-```
-
-JIT extension compilation and the warmup call are excluded from measured CUDA
-event timings. The Python-loop baseline is capped at batch size 256 because it
-intentionally measures per-member Python and kernel-launch overhead.
-
 ## GCP Spot VM
 
 Create a full-GPU `g4-standard-48` Spot VM. The manager requires a project and
-authenticated gcloud account, and defaults to region `us-east5`. It discovers
-a zone in the requested region where
-the machine type is advertised; pass `--zone` to choose one explicitly.
+authenticated gcloud account, and defaults to region `us-east5`.
 
 ```bash
-./scripts/manage_g4_spot_vm.sh create \
+.venv/bin/python -m scripts.manage_g4_spot_vm create \
   --project PROJECT_ID \
   --account ACCOUNT \
   --region us-east5
 ```
 
-The VM uses a 50 GB Hyperdisk Balanced boot disk and Ubuntu 24.04. A startup
-script installs the current production NVIDIA driver. Spot preemption stops
-the VM, and the boot disk remains available with auto-delete disabled. The
-preserved disk continues to incur storage charges.
+The VM uses a 50 GB Hyperdisk Balanced boot disk and Ubuntu 24.04. Spot
+preemption stops the VM, and the boot disk remains available with auto-delete
+disabled. The preserved disk continues to incur storage charges.
 
-Preview all create arguments without provisioning a VM:
+Preview create arguments without provisioning a VM:
 
 ```bash
-./scripts/manage_g4_spot_vm.sh create \
+.venv/bin/python -m scripts.manage_g4_spot_vm create \
   --project PROJECT_ID \
   --account ACCOUNT \
   --zone us-east5-a \
@@ -91,10 +100,13 @@ Preview all create arguments without provisioning a VM:
 Stop the VM while preserving its boot disk, then start it again:
 
 ```bash
-./scripts/manage_g4_spot_vm.sh stop --project PROJECT_ID --account ACCOUNT
-./scripts/manage_g4_spot_vm.sh start --project PROJECT_ID --account ACCOUNT
+.venv/bin/python -m scripts.manage_g4_spot_vm stop --project PROJECT_ID --account ACCOUNT
+.venv/bin/python -m scripts.manage_g4_spot_vm start --project PROJECT_ID --account ACCOUNT
 ```
 
-The launcher requires an existing gcloud credential for the selected account
-and access to the selected project. Authenticate with
-`gcloud auth login "<user>"` if the credential is absent.
+VM bootstrap installs but disables `bfgs-benchmark.service`. Run the benchmark
+manually on the VM with:
+
+```bash
+sudo /opt/batched-bfgs/scripts/run_benchmark_remote.sh
+```

@@ -128,10 +128,11 @@ class BenchmarkRunner:
             "objective": self._objective_name.value,
             "dimension": self._dimension,
             "cuda_kernel_included": cuda is not None,
-            "cuda_kernel_constraint": (
-                None
-                if cuda is not None
-                else "the fused CUDA baseline supports only 2D Rosenbrock"
+            "cuda_kernel_constraint": None
+            if cuda is not None
+            else (
+                "the fused CUDA kernels support 2D Rosenbrock and 16D "
+                "extended Rosenbrock/Powell"
             ),
             "correctness": correctness,
             "timings": records,
@@ -153,14 +154,16 @@ class BenchmarkRunner:
         )
 
     def _cuda_implementation(self, device: torch.device) -> CudaBfgs | None:
-        compatible = (
-            device.type == "cuda"
-            and self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
-            and self._dimension == 2
+        compatible = device.type == "cuda" and (
+            self._dimension == 16
+            or (
+                self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
+                and self._dimension == 2
+            )
         )
         if not compatible:
             return None
-        cuda = CudaBfgs(self._config)
+        cuda = CudaBfgs(self._config, self._objective_name.value)
         cuda.compile()
         return cuda
 

@@ -11,16 +11,28 @@ from batched_bfgs.models import BfgsConfig, OptimizationResult
 
 
 class CudaBfgs:
-    """Run one fused 2D Rosenbrock optimization per CUDA thread."""
+    """Run one fused fixed-dimensional optimization per CUDA thread."""
 
-    def __init__(self, config: BfgsConfig) -> None:
+    def __init__(
+        self,
+        config: BfgsConfig,
+        objective: str = "extended_rosenbrock",
+    ) -> None:
         """Initialize the optimizer without compiling the extension.
 
         Args:
             config: Shared numerical configuration.
+            objective: Analytic objective implemented by the CUDA extension.
 
         """
         self._config = config
+        objective_codes = {
+            "extended_rosenbrock": 0,
+            "extended_powell": 1,
+        }
+        if objective not in objective_codes:
+            raise ValueError(f"unsupported CUDA objective: {objective}")
+        self._objective_code = objective_codes[objective]
         self._extension: ModuleType | None = None
 
     def compile(self, verbose: bool = True) -> None:
@@ -36,7 +48,7 @@ class CudaBfgs:
         os.environ["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}"
         source_dir = Path(__file__).resolve().parent / "csrc"
         self._extension = load(
-            name="batched_bfgs_cuda_v1",
+            name="batched_bfgs_cuda_v2",
             sources=[
                 str(source_dir / "bfgs.cpp"),
                 str(source_dir / "bfgs_kernel.cu"),
@@ -52,7 +64,7 @@ class CudaBfgs:
         """Optimize a contiguous CUDA batch.
 
         Args:
-            starts: CUDA tensor with shape ``[batch, 2]``.
+            starts: CUDA tensor with shape ``[batch, 2]`` or ``[batch, 16]``.
 
         Returns:
             One optimization result per batch member.
@@ -60,8 +72,10 @@ class CudaBfgs:
         """
         if not starts.is_cuda:
             raise ValueError("starts must be on a CUDA device")
-        if starts.ndim != 2 or starts.shape[1] != 2:
-            raise ValueError("starts must have shape [batch, 2]")
+        if starts.ndim != 2 or starts.shape[1] not in (2, 16):
+            raise ValueError("starts must have shape [batch, 2] or [batch, 16]")
+        if starts.shape[1] == 2 and self._objective_code != 0:
+            raise ValueError("2D CUDA optimization supports only Rosenbrock")
         if starts.shape[0] == 0:
             raise ValueError("starts must contain at least one batch member")
         if starts.dtype not in (torch.float32, torch.float64):
@@ -72,6 +86,7 @@ class CudaBfgs:
             raise RuntimeError("CUDA extension failed to load")
         values = self._extension.optimize(
             starts.contiguous(),
+            self._objective_code,
             self._config.c1,
             self._config.c2,
             self._config.tolerance,

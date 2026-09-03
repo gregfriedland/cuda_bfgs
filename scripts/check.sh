@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Purpose: Sync dependencies and run the repository's static quality checks.
+# Usage: Run from anywhere inside the repository: ./scripts/check.sh
 
 set -euo pipefail
 
