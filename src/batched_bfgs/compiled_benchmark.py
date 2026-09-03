@@ -125,7 +125,13 @@ class CompiledBenchmarkRunner:
             self._objective,
             self._chunk_size,
         ).run(starts)
-        torch.testing.assert_close(compiled.x, eager.x, atol=1e-4, rtol=1e-4)
+        parity_tolerance = 5.0 * self._config.tolerance
+        torch.testing.assert_close(
+            compiled.x,
+            eager.x,
+            atol=parity_tolerance,
+            rtol=parity_tolerance,
+        )
         torch.testing.assert_close(
             compiled.objective,
             eager.objective,
@@ -135,20 +141,21 @@ class CompiledBenchmarkRunner:
         torch.testing.assert_close(
             compiled.gradient,
             eager.gradient,
-            atol=1e-4,
-            rtol=1e-4,
+            atol=parity_tolerance,
+            rtol=parity_tolerance,
         )
         torch.testing.assert_close(compiled.converged, eager.converged)
         torch.testing.assert_close(
             compiled.wolfe_satisfied,
             eager.wolfe_satisfied,
         )
+        target = ObjectiveFactory.minimizer(self._objective_name, starts)
         BenchmarkRunner._assert_result(
             self.implementation,
             compiled,
             self._objective.value_and_gradient(starts)[0],
-            ObjectiveFactory.minimizer(self._objective_name, starts),
-            1e-4
+            target,
+            parity_tolerance
             if self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
             else 1e-2,
         )
@@ -161,6 +168,9 @@ class CompiledBenchmarkRunner:
             "maximum_iteration_difference_from_eager": int(
                 (compiled.iterations - eager.iterations).abs().amax()
             ),
+            "maximum_position_error": float((compiled.x - target).abs().amax()),
+            "maximum_gradient": float(compiled.gradient.abs().amax()),
+            "parity_tolerance": parity_tolerance,
             "all_converged": True,
             "all_steps_satisfied_strong_wolfe": True,
         }
