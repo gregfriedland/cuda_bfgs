@@ -5,9 +5,22 @@ set -euo pipefail
 exec > >(tee -a /var/log/g4-setup.log) 2>&1
 
 ready_file=/var/lib/bfgs-g4-ready
-if [[ -f "$ready_file" ]]; then
+failed_file=/var/lib/bfgs-g4-failed
+
+record_failure() {
+    local exit_code=$?
+    printf '{"exit_code":%d,"failed_at":"%s"}\n' \
+        "$exit_code" "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" \
+        >"$failed_file"
+    exit "$exit_code"
+}
+trap record_failure ERR
+
+if [[ -f "$ready_file" ]] && nvidia-smi >/dev/null 2>&1 && \
+    [[ -x /usr/local/cuda-12.8/bin/nvcc ]]; then
     exit 0
 fi
+rm -f "$ready_file" "$failed_file"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update

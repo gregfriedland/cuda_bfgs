@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+state_dir=/var/lib/bfgs-benchmark
+install -d -m 0755 "$state_dir"
+if [[ -f "$state_dir/DONE.json" && -s "$state_dir/report.json" ]]; then
+    exit 0
+fi
+
+attempt_file="$state_dir/attempt"
+attempt=1
+if [[ -f "$attempt_file" ]]; then
+    attempt=$(( $(<"$attempt_file") + 1 ))
+fi
+printf '%d\n' "$attempt" >"$attempt_file"
+
+boot_id="$(</proc/sys/kernel/random/boot_id)"
+commit="$(</opt/batched-bfgs/SOURCE_COMMIT)"
+log_path="$state_dir/benchmark-attempt-${attempt}.log"
+failed_tmp="$state_dir/.FAILED.json.tmp"
+
+record_failure() {
+    local exit_code=$?
+    printf '{"attempt":%d,"boot_id":"%s","commit":"%s","exit_code":%d,"failed_at":"%s","log":"%s"}\n' \
+        "$attempt" "$boot_id" "$commit" "$exit_code" \
+        "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" "$log_path" >"$failed_tmp"
+    mv "$failed_tmp" "$state_dir/FAILED.json"
+    rm -f "$state_dir/RUNNING.json"
+    exit "$exit_code"
+}
+trap record_failure ERR
+
+rm -f "$state_dir/FAILED.json" "$state_dir/PREEMPTED.json"
+running_tmp="$state_dir/.RUNNING.json.tmp"
+printf '{"attempt":%d,"boot_id":"%s","commit":"%s","pid":%d,"started_at":"%s"}\n' \
+    "$attempt" "$boot_id" "$commit" "$$" \
+    "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" >"$running_tmp"
+mv "$running_tmp" "$state_dir/RUNNING.json"
+
+report_tmp="$state_dir/.report.json.tmp"
+PATH="/usr/local/cuda-12.8/bin:$PATH" \
+    .venv/bin/python -m batched_bfgs.benchmark \
+    --batch_sizes 64 256 4096 65536 \
+    --repeats 5 >"$report_tmp" 2>"$log_path"
+.venv/bin/python -m json.tool "$report_tmp" >/dev/null
+mv "$report_tmp" "$state_dir/report.json"
+
+done_tmp="$state_dir/.DONE.json.tmp"
+printf '{"attempt":%d,"boot_id":"%s","commit":"%s","finished_at":"%s","report":"%s"}\n' \
+    "$attempt" "$boot_id" "$commit" \
+    "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" \
+    "$state_dir/report.json" >"$done_tmp"
+mv "$done_tmp" "$state_dir/DONE.json"
+rm -f "$state_dir/RUNNING.json"

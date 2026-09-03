@@ -145,7 +145,9 @@ if [[ "$action" == create ]]; then
         describe "$machine_type" --zone="$zone" >/dev/null
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     startup_script="$script_dir/g4_startup.sh"
+    shutdown_script="$script_dir/g4_shutdown.sh"
     [[ -r "$startup_script" ]] || die "missing startup script: $startup_script"
+    [[ -r "$shutdown_script" ]] || die "missing shutdown script: $shutdown_script"
     command=(
         gcloud
         --account="$account"
@@ -169,7 +171,7 @@ if [[ "$action" == create ]]; then
         --no-shielded-secure-boot
         --shielded-vtpm
         --shielded-integrity-monitoring
-        --metadata-from-file="startup-script=$startup_script"
+        --metadata-from-file="startup-script=$startup_script,shutdown-script=$shutdown_script"
     )
 else
     status="$({

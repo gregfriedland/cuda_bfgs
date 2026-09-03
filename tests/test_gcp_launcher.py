@@ -42,3 +42,18 @@ class TestGcpLauncher:
         assert "boot_disk_size_gb=50" in launcher
         assert "compute instances stop" in launcher
         assert "compute instances start" in launcher
+        assert "shutdown-script=$shutdown_script" in launcher
+
+    def test_remote_runner_has_durable_markers(self) -> None:
+        """Startup and benchmark scripts persist explicit terminal state."""
+        root = Path(__file__).resolve().parents[1]
+        startup = (root / "scripts/g4_startup.sh").read_text()
+        runner = (root / "scripts/run_benchmark_remote.sh").read_text()
+        service = (root / "scripts/bfgs-benchmark.service").read_text()
+        assert "bfgs-g4-ready" in startup
+        assert "bfgs-g4-failed" in startup
+        assert "cuda-toolkit-12-8" in startup
+        assert "RUNNING.json" in runner
+        assert "DONE.json" in runner
+        assert "FAILED.json" in runner
+        assert "WantedBy=multi-user.target" in service

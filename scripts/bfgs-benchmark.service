@@ -1,0 +1,17 @@
+[Unit]
+Description=Batched strong-Wolfe BFGS benchmark
+After=google-startup-scripts.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/var/lib/bfgs-g4-ready
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/batched-bfgs
+Environment=CUDA_HOME=/usr/local/cuda-12.8
+Environment=TORCH_CUDA_ARCH_LIST=12.0
+Environment=TORCH_EXTENSIONS_DIR=/opt/batched-bfgs/.torch_extensions
+ExecStart=/opt/batched-bfgs/scripts/run_benchmark_remote.sh
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target
