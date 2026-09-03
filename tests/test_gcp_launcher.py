@@ -72,6 +72,7 @@ class TestGcpLauncher:
         assert "WantedBy=multi-user.target" in service
         assert compiled_path.stat().st_mode & 0o111
         assert "COMPILED_DONE.json" in compiled_runner
+        assert "COMPILED_RUNNING.json" in compiled_runner
         assert "report-with-compiled.json" in compiled_runner
         assert "batched_bfgs.compiled_benchmark" in compiled_runner
 

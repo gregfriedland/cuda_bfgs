@@ -12,7 +12,17 @@ timing_state="$state_dir/timing-state.json"
 
 test -s "$state_dir/DONE.json"
 test -s "$standard_report"
+if [[ -s "$state_dir/COMPILED_DONE.json" && -s "$combined_report" ]]; then
+    exit 0
+fi
 rm -f "$state_dir/COMPILED_FAILED.json"
+
+commit="$(</opt/batched-bfgs/SOURCE_COMMIT)"
+printf '{"commit":"%s","pid":%d,"started_at":"%s"}\n' \
+    "$commit" "$$" "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" \
+    >"$state_dir/.COMPILED_RUNNING.json.tmp"
+mv "$state_dir/.COMPILED_RUNNING.json.tmp" \
+    "$state_dir/COMPILED_RUNNING.json"
 
 record_failure() {
     local exit_code=$?
@@ -21,6 +31,7 @@ record_failure() {
         >"$state_dir/.COMPILED_FAILED.json.tmp"
     mv "$state_dir/.COMPILED_FAILED.json.tmp" \
         "$state_dir/COMPILED_FAILED.json"
+    rm -f "$state_dir/COMPILED_RUNNING.json"
     exit "$exit_code"
 }
 trap record_failure ERR
@@ -65,3 +76,4 @@ printf '{"finished_at":"%s","report":"%s"}\n' \
     "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" "$combined_report" \
     >"$state_dir/.COMPILED_DONE.json.tmp"
 mv "$state_dir/.COMPILED_DONE.json.tmp" "$state_dir/COMPILED_DONE.json"
+rm -f "$state_dir/COMPILED_RUNNING.json"
