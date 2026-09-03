@@ -62,7 +62,7 @@ class FlyteWaiter:
         started = time.monotonic()
         while True:
             execution = Run.get(name=self._run_id)
-            phase = str(execution.phase)
+            phase = str(execution.phase).rsplit(".", maxsplit=1)[-1]
             snapshot = await self._snapshot(execution, phase)
             self._write_snapshot(snapshot)
             if phase in TERMINAL_PHASES:
@@ -84,7 +84,7 @@ class FlyteWaiter:
                 {
                     "name": str(getattr(action, "name", "")),
                     "task_name": str(getattr(action, "task_name", "")),
-                    "phase": str(action.phase),
+                    "phase": str(action.phase).rsplit(".", maxsplit=1)[-1],
                 },
             )
         return {

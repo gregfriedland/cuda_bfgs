@@ -1,7 +1,10 @@
 """Idempotent Flyte submission entry point for the BFGS benchmark."""
 
 import argparse
+import hashlib
 import json
+import math
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -59,13 +62,14 @@ class FlyteCampaign:
         active_run_id = state.get("active_run_id")
         if active_run_id is not None:
             current = Run.get(name=active_run_id)
-            state["phase"] = str(current.phase)
+            phase = str(current.phase).rsplit(".", maxsplit=1)[-1]
+            state["phase"] = phase
             state["last_checked_at"] = self._now()
             self._write_state(state)
-            if str(current.phase) not in TERMINAL_PHASES:
+            if phase not in TERMINAL_PHASES:
                 return state
-            if str(current.phase) == "SUCCEEDED":
-                return state
+            if phase == "SUCCEEDED":
+                return self._collect(current, state)
             if not self._allow_retry:
                 raise RuntimeError(
                     "recorded run failed; pass --resume after diagnosis",
@@ -73,6 +77,7 @@ class FlyteCampaign:
         return self._submit(state)
 
     def _submit(self, state: dict[str, Any]) -> dict[str, Any]:
+        self._assert_submission_ready(state)
         attempts = int(state.get("attempts", 0)) + 1
         if attempts > 3:
             raise RuntimeError("campaign retry budget of three is exhausted")
@@ -106,6 +111,94 @@ class FlyteCampaign:
         )
         self._write_state(state)
         return state
+
+    def _assert_submission_ready(self, state: dict[str, Any]) -> None:
+        requirements = self._read_json("capability_requirements.json")
+        profile = self._read_json("heartbeat_profile.json")
+        readiness = self._read_json("submission_readiness.json")
+        required_class = requirements["required_monitor_class"]
+        verified_class = profile["verified_monitor_class"]
+        if required_class != "self_healing" or verified_class != required_class:
+            raise RuntimeError("a verified self-healing monitor is required")
+        if profile["automation_id"] != requirements["automation_id"]:
+            raise RuntimeError("heartbeat identity does not match requirements")
+        if (
+            requirements["origin_thread_id"]
+            != requirements["delivery_thread_id"]
+        ):
+            raise RuntimeError("origin and delivery thread IDs must match")
+        capabilities = profile["capabilities"]
+        if not capabilities or not all(
+            item["verified"] for item in capabilities.values()
+        ):
+            raise RuntimeError("not every heartbeat capability was verified")
+        commit = self._git_commit()
+        if readiness["commit"] != commit:
+            raise RuntimeError("submission readiness does not match HEAD")
+        submitter = self._root / "src/batched_bfgs/submit.py"
+        digest = hashlib.sha256(submitter.read_bytes()).hexdigest()
+        if readiness["submitter_sha256"] != digest:
+            raise RuntimeError(
+                "submission entry point changed after validation"
+            )
+        state["required_monitor_class"] = required_class
+        state["verified_monitor_class"] = verified_class
+        state["monitor_verified_at"] = profile["verified_at"]
+
+    def _collect(self, execution: Run, state: dict[str, Any]) -> dict[str, Any]:
+        outputs = execution.outputs()
+        if len(outputs) != 1:
+            raise RuntimeError("benchmark task must return exactly one output")
+        encoded_report = outputs[0]
+        if not isinstance(encoded_report, str):
+            raise TypeError("benchmark output must be a JSON string")
+        report = json.loads(encoded_report)
+        self._validate_report(report)
+        report_path = self._run_dir / "benchmark_report.json"
+        temporary = report_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n"
+        )
+        temporary.replace(report_path)
+        state["phase"] = "COMPLETE"
+        state["terminal_verified_at"] = self._now()
+        state["validated_artifacts"] = [str(report_path)]
+        self._write_state(state)
+        return state
+
+    @staticmethod
+    def _validate_report(report: dict[str, Any]) -> None:
+        correctness = report["correctness"]
+        if not correctness["all_converged"]:
+            raise RuntimeError("correctness batch did not converge")
+        if not correctness["all_steps_satisfied_strong_wolfe"]:
+            raise RuntimeError("a correctness step violated strong Wolfe")
+        timings = report["timings"]
+        if not timings:
+            raise RuntimeError("benchmark report has no timings")
+        for timing in timings:
+            elapsed = float(timing["median_ms"])
+            fraction = float(timing["converged_fraction"])
+            if not math.isfinite(elapsed) or elapsed <= 0.0:
+                raise RuntimeError("timing is not finite and positive")
+            if not -1e-12 <= fraction <= 1.0 + 1e-12:
+                raise RuntimeError("converged fraction is outside [0, 1]")
+
+    def _read_json(self, name: str) -> dict[str, Any]:
+        path = self._run_dir / name
+        if not path.is_file():
+            raise RuntimeError(f"required file is missing: {path}")
+        return json.loads(path.read_text())
+
+    def _git_commit(self) -> str:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self._root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
 
     def _initialize_flyte(self) -> None:
         flyte.init(
