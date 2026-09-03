@@ -55,6 +55,8 @@ class TestGcpLauncher:
         runner = (root / "scripts/run_benchmark_remote.sh").read_text()
         compiled_path = root / "scripts/run_compiled_benchmark_remote.sh"
         compiled_runner = compiled_path.read_text()
+        profile_path = root / "scripts/run_cuda_profile_remote.sh"
+        profile_runner = profile_path.read_text()
         service = (root / "scripts/bfgs-benchmark.service").read_text()
         assert "bfgs-g4-ready" in startup
         assert "bfgs-g4-failed" in startup
@@ -75,6 +77,12 @@ class TestGcpLauncher:
         assert "COMPILED_RUNNING.json" in compiled_runner
         assert "report-with-compiled.json" in compiled_runner
         assert "batched_bfgs.compiled_benchmark" in compiled_runner
+        assert profile_path.stat().st_mode & 0o111
+        assert "PROFILE_RUNNING.json" in profile_runner
+        assert "PROFILE_DONE.json" in profile_runner
+        assert "nsys profile" in profile_runner
+        assert "--capture-range=cudaProfilerApi" in profile_runner
+        assert "BFGS_CUDA_RESOURCE_USAGE=1" in profile_runner
 
     def test_benchmark_labels_both_pytorch_implementations(self) -> None:
         """Reports distinguish naive and chunked PyTorch implementations."""

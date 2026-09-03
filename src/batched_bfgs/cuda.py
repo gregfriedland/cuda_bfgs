@@ -47,6 +47,9 @@ class CudaBfgs:
         major, minor = torch.cuda.get_device_capability()
         os.environ["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}"
         source_dir = Path(__file__).resolve().parent / "csrc"
+        cuda_flags = ["-O3", "-lineinfo"]
+        if os.environ.get("BFGS_CUDA_RESOURCE_USAGE") == "1":
+            cuda_flags.append("--resource-usage")
         self._extension = load(
             name="batched_bfgs_cuda_v2",
             sources=[
@@ -54,7 +57,7 @@ class CudaBfgs:
                 str(source_dir / "bfgs_kernel.cu"),
             ],
             extra_cflags=["-O3"],
-            extra_cuda_cflags=["-O3", "-lineinfo"],
+            extra_cuda_cflags=cuda_flags,
             with_cuda=True,
             verbose=verbose,
         )

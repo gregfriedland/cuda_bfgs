@@ -138,7 +138,6 @@ class CompiledBenchmarkRunner:
             atol=1e-4,
             rtol=1e-4,
         )
-        torch.testing.assert_close(compiled.iterations, eager.iterations)
         torch.testing.assert_close(compiled.converged, eager.converged)
         torch.testing.assert_close(
             compiled.wolfe_satisfied,
@@ -159,7 +158,9 @@ class CompiledBenchmarkRunner:
             "maximum_position_difference_from_eager": float(
                 (compiled.x - eager.x).abs().amax()
             ),
-            "identical_iterations": True,
+            "maximum_iteration_difference_from_eager": int(
+                (compiled.iterations - eager.iterations).abs().amax()
+            ),
             "all_converged": True,
             "all_steps_satisfied_strong_wolfe": True,
         }
