@@ -17,9 +17,9 @@ class TestGcpLauncher:
             text=True,
         )
         assert "g4-standard-48" in result.stdout
-        assert "default: muziq-501806" in result.stdout
+        assert "default: <gcp-project>" in result.stdout
         assert "default: us-east5" in result.stdout
-        assert "default: greg.friedland@gmail.com" in result.stdout
+        assert "default: <user>" in result.stdout
 
     def test_create_command_is_spot_g4(self) -> None:
         """The create command uses the required G4 Spot safety contract."""
@@ -29,9 +29,11 @@ class TestGcpLauncher:
             'machine_type="g4-standard-48"',
             "--boot-disk-type=hyperdisk-balanced",
             "--provisioning-model=SPOT",
-            "--instance-termination-action=DELETE",
+            "--instance-termination-action=STOP",
+            "--no-boot-disk-auto-delete",
             "--maintenance-policy=TERMINATE",
             "--no-restart-on-failure",
         )
         for argument in required_arguments:
             assert argument in launcher
+        assert 'boot_disk_size_gb=50' in launcher

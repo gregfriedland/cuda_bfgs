@@ -2,12 +2,12 @@
 
 set -euo pipefail
 
-account="greg.friedland@gmail.com"
-boot_disk_size_gb=200
+account="<user>"
+boot_disk_size_gb=50
 dry_run=false
 instance_name="bfgs-g4-spot"
 machine_type="g4-standard-48"
-project="muziq-501806"
+project="<gcp-project>"
 region="us-east5"
 zone=""
 
@@ -18,12 +18,12 @@ Usage: create_g4_spot_vm.sh [OPTIONS]
 Create a GCP g4-standard-48 Spot VM.
 
 Options:
-  --project PROJECT       GCP project ID (default: muziq-501806)
+  --project PROJECT       GCP project ID (default: <gcp-project>)
   --region REGION         GCP region (default: us-east5)
   --zone ZONE             Exact zone; otherwise discover one in REGION
   --name NAME             Instance name (default: bfgs-g4-spot)
-  --account ACCOUNT       gcloud account (default: greg.friedland@gmail.com)
-  --boot-disk-size-gb GB  Boot disk size (default: 200)
+  --account ACCOUNT       gcloud account (default: <user>)
+  --boot-disk-size-gb GB  Boot disk size (default: 50)
   --dry-run               Print the create command without provisioning
   -h, --help              Show this help
 EOF
@@ -120,8 +120,9 @@ create_command=(
     --boot-disk-size="${boot_disk_size_gb}GB"
     --boot-disk-provisioned-iops=3000
     --boot-disk-provisioned-throughput=140
+    --no-boot-disk-auto-delete
     --provisioning-model=SPOT
-    --instance-termination-action=DELETE
+    --instance-termination-action=STOP
     --maintenance-policy=TERMINATE
     --no-restart-on-failure
     --no-service-account

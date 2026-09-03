@@ -62,19 +62,20 @@ intentionally measures per-member Python and kernel-launch overhead.
 ## GCP Spot VM
 
 Create a full-GPU `g4-standard-48` Spot VM. The launcher defaults to project
-`muziq-501806`, region `us-east5`, and the authenticated gcloud account
-`greg.friedland@gmail.com`. It discovers a zone in the requested region where
+`<gcp-project>`, region `us-east5`, and the authenticated gcloud account
+`<user>`. It discovers a zone in the requested region where
 the machine type is advertised; pass `--zone` to choose one explicitly.
 
 ```bash
 ./scripts/create_g4_spot_vm.sh \
-  --project muziq-501806 \
+  --project "<gcp-project>" \
   --region us-east5
 ```
 
-The VM uses a 200 GB Hyperdisk Balanced boot disk and Ubuntu 24.04. A startup
-script installs the current production NVIDIA driver. Spot preemption deletes
-the VM and its auto-delete boot disk, so do not keep unique results there.
+The VM uses a 50 GB Hyperdisk Balanced boot disk and Ubuntu 24.04. A startup
+script installs the current production NVIDIA driver. Spot preemption stops
+the VM, and the boot disk remains available with auto-delete disabled. The
+preserved disk continues to incur storage charges.
 
 Preview all create arguments without provisioning a VM:
 
@@ -84,4 +85,4 @@ Preview all create arguments without provisioning a VM:
 
 The launcher requires an existing gcloud credential for the selected account
 and access to the selected project. Authenticate with
-`gcloud auth login greg.friedland@gmail.com` if the credential is absent.
+`gcloud auth login "<user>"` if the credential is absent.
