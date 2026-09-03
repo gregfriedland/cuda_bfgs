@@ -69,7 +69,7 @@ G4_POD = flyte.PodTemplate(
 )
 
 BFGS_ENVIRONMENT = flyte.TaskEnvironment(
-    name="batched_bfgs_g4",
+    name="run",
     image=BFGS_IMAGE,
     interruptible=False,
     pod_template=G4_POD,
@@ -77,7 +77,7 @@ BFGS_ENVIRONMENT = flyte.TaskEnvironment(
 
 
 @BFGS_ENVIRONMENT.task(retries=0)
-async def run_benchmark(batch_sizes: list[int], repeats: int) -> str:
+async def test(batch_sizes: list[int], repeats: int) -> str:
     """Run the three-way BFGS benchmark on one G4 GPU.
 
     Args:

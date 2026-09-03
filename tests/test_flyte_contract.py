@@ -1,6 +1,7 @@
 """Resource contract for the standalone G4 Flyte task."""
 
-from batched_bfgs.flyte_app import G4_POD
+from batched_bfgs.flyte_app import BFGS_ENVIRONMENT, G4_POD
+from batched_bfgs.flyte_app import test as flyte_test
 
 
 class TestFlyteContract:
@@ -22,3 +23,8 @@ class TestFlyteContract:
         assert resources.requests["nvidia.com/gpu"] == "1"
         assert resources.requests["cpu"] == "47000m"
         assert resources.limits["cpu"] == "48000m"
+
+    def test_public_names(self) -> None:
+        """The workflow and task use the requested names."""
+        assert BFGS_ENVIRONMENT.name == "run"
+        assert flyte_test.name == "run.test"

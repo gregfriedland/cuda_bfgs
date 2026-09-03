@@ -18,6 +18,23 @@ call a Python objective callback.
 .venv/bin/python -m pytest -q tests/test_cpu_equivalence.py
 ```
 
+## Static checks
+
+The shared check script creates or updates `.venv` from `uv.lock`, then runs
+Ruff linting, Ruff's formatting check, and ty type checking:
+
+```bash
+./scripts/check.sh
+```
+
+Enable the tracked pre-push hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The same script runs in GitHub Actions for pushes and pull requests.
+
 The local machine does not need CUDA for the CPU equivalence test. The complete
 three-way benchmark requires a CUDA development environment:
 

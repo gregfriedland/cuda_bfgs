@@ -18,9 +18,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pyright>=1.1.400",
     "pytest>=8.3,<9",
     "ruff>=0.12,<1",
+    "ty>=0.0.77,<1",
 ]
 
 [project.scripts]
@@ -30,13 +30,6 @@ bfgs-wait = "batched_bfgs.wait:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/batched_bfgs"]
-
-[tool.pyright]
-include = ["src", "tests"]
-pythonVersion = "3.12"
-typeCheckingMode = "standard"
-venv = ".venv"
-venvPath = "."
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

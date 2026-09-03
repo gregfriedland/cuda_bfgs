@@ -12,7 +12,7 @@ from typing import Any
 import flyte
 from flyte.remote import Run
 
-from batched_bfgs.flyte_app import run_benchmark
+from batched_bfgs.flyte_app import test
 from batched_bfgs.flyte_constants import (
     FLYTE_DOMAIN,
     FLYTE_ENDPOINT,
@@ -85,7 +85,7 @@ class FlyteCampaign:
             copy_style="all",
             interruptible=False,
         ).run(
-            run_benchmark,
+            test,
             batch_sizes=self._batch_sizes,
             repeats=self._repeats,
         )
