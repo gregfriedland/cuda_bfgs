@@ -61,14 +61,15 @@ intentionally measures per-member Python and kernel-launch overhead.
 
 ## GCP Spot VM
 
-Create a full-GPU `g4-standard-48` Spot VM. The launcher defaults to project
-`<gcp-project>`, region `us-east5`, and the authenticated gcloud account
-`<user>`. It discovers a zone in the requested region where
+Create a full-GPU `g4-standard-48` Spot VM. The manager requires a project and
+authenticated gcloud account, and defaults to region `us-east5`. It discovers
+a zone in the requested region where
 the machine type is advertised; pass `--zone` to choose one explicitly.
 
 ```bash
-./scripts/create_g4_spot_vm.sh \
-  --project "<gcp-project>" \
+./scripts/manage_g4_spot_vm.sh create \
+  --project PROJECT_ID \
+  --account ACCOUNT \
   --region us-east5
 ```
 
@@ -80,7 +81,18 @@ preserved disk continues to incur storage charges.
 Preview all create arguments without provisioning a VM:
 
 ```bash
-./scripts/create_g4_spot_vm.sh --zone us-east5-a --dry-run
+./scripts/manage_g4_spot_vm.sh create \
+  --project PROJECT_ID \
+  --account ACCOUNT \
+  --zone us-east5-a \
+  --dry-run
+```
+
+Stop the VM while preserving its boot disk, then start it again:
+
+```bash
+./scripts/manage_g4_spot_vm.sh stop --project PROJECT_ID --account ACCOUNT
+./scripts/manage_g4_spot_vm.sh start --project PROJECT_ID --account ACCOUNT
 ```
 
 The launcher requires an existing gcloud credential for the selected account
