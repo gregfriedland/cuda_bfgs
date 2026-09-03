@@ -7,9 +7,8 @@ for independent 2D Rosenbrock problems:
 2. Masked batched PyTorch tensor operations.
 3. One complete optimization per CUDA thread in a custom extension.
 
-The numerical contract is pinned in [ALGORITHM.md](ALGORITHM.md). The CUDA
-kernel duplicates the Rosenbrock value and gradient because device code cannot
-call a Python objective callback.
+The CUDA kernel duplicates the Rosenbrock value and gradient because device
+code cannot call a Python objective callback.
 
 ## Local setup and CPU checks
 
