@@ -20,6 +20,9 @@ class TimingConfiguration(BaseModelNoExtra):
     dtype: str
     tolerance: float
     repeats: int
+    torch_version: str | None = None
+    compile_mode: str | None = None
+    chunk_size: int | None = None
 
     @property
     def key(self) -> str:
@@ -34,6 +37,12 @@ class TimingConfiguration(BaseModelNoExtra):
             f"{self.tolerance:.17g}",
             str(self.repeats),
         )
+        if self.compile_mode is not None:
+            fields += (
+                self.torch_version or "unknown-torch",
+                self.compile_mode,
+                str(self.chunk_size),
+            )
         return "|".join(fields)
 
 
@@ -47,6 +56,12 @@ class TimingRecord(BaseModelNoExtra):
     median_iterations: float
     converged_fraction: float
     repeats: int
+    first_run_ms: float | None = None
+    estimated_compile_overhead_ms: float | None = None
+    compiled_graphs: int | None = None
+    steady_state_new_graphs: int | None = None
+    graph_breaks: int | None = None
+    peak_memory_mb: float | None = None
 
     @model_validator(mode="after")
     def _validate_metrics(self) -> Self:
@@ -62,6 +77,15 @@ class TimingRecord(BaseModelNoExtra):
             raise ValueError("median_ms must be positive")
         if not -1e-12 <= self.converged_fraction <= 1.0 + 1e-12:
             raise ValueError("converged_fraction is outside tolerance")
+        optional_values = (
+            self.first_run_ms,
+            self.estimated_compile_overhead_ms,
+            self.peak_memory_mb,
+        )
+        if not all(
+            value is None or math.isfinite(value) for value in optional_values
+        ):
+            raise ValueError("optional timing metrics must be finite")
         return self
 
 
@@ -142,7 +166,7 @@ class TimingCache:
             raise ValueError("not-desired configurations cannot be timed")
         if entry.timing is None:
             return None
-        return entry.timing.model_dump()
+        return entry.timing.model_dump(exclude_none=True)
 
     def record(
         self,

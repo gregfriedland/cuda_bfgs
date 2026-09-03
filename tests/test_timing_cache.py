@@ -38,6 +38,20 @@ class TestTimingCache:
         assert TimingCache(state_path).timing(desired) == timing
         assert not state_path.with_suffix(".json.tmp").exists()
 
+    def test_compiled_configuration_has_distinct_environment_key(self) -> None:
+        """Compiled timings cannot reuse another compiler environment."""
+        base = self._configuration("pytorch (compiled chunked)", 256)
+        first = base.model_copy(
+            update={
+                "torch_version": "2.8.0",
+                "compile_mode": "inductor-fullgraph-static",
+                "chunk_size": 16,
+            }
+        )
+        second = first.model_copy(update={"torch_version": "2.9.0"})
+
+        assert first.key != second.key
+
     @staticmethod
     def _configuration(
         implementation: str,

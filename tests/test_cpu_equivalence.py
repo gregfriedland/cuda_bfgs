@@ -1,8 +1,12 @@
 """CPU checks for analytic objectives and generic-dimensional BFGS."""
 
 import torch
+from pytest import MonkeyPatch
 
-from batched_bfgs.chunked import ChunkedVectorizedBfgs
+from batched_bfgs.chunked import (
+    ChunkedVectorizedBfgs,
+    CompiledChunkedVectorizedBfgs,
+)
 from batched_bfgs.loop import LoopBfgs
 from batched_bfgs.models import BfgsConfig, OptimizationResult
 from batched_bfgs.objective import (
@@ -131,6 +135,36 @@ class TestCpuEquivalence:
                     assert "[batch, dimension]" in str(error)
                 else:
                     raise AssertionError("empty input shape was accepted")
+
+    def test_compiled_chunk_wraps_one_iteration(
+        self,
+        monkeypatch: MonkeyPatch,
+    ) -> None:
+        """Compiled chunks preserve eager results without compiling the loop."""
+        compile_arguments: dict[str, object] = {}
+
+        def fake_compile(function: object, **kwargs: object) -> object:
+            compile_arguments.update(kwargs)
+            return function
+
+        monkeypatch.setattr(torch, "compile", fake_compile)
+        objective = ExtendedRosenbrockObjective()
+        starts = objective.make_starts(
+            4,
+            2,
+            torch.device("cpu"),
+            torch.float64,
+        )
+        config = BfgsConfig(tolerance=1e-7, max_iterations=100)
+        eager = ChunkedVectorizedBfgs(config, objective).run(starts)
+        compiled = CompiledChunkedVectorizedBfgs(config, objective).run(starts)
+
+        torch.testing.assert_close(compiled, eager)
+        assert compile_arguments == {
+            "backend": "inductor",
+            "fullgraph": True,
+            "dynamic": False,
+        }
 
     @staticmethod
     def _assert_equivalent(

@@ -53,6 +53,8 @@ class TestGcpLauncher:
         root = Path(__file__).resolve().parents[1]
         startup = (root / "scripts/g4_startup.sh").read_text()
         runner = (root / "scripts/run_benchmark_remote.sh").read_text()
+        compiled_path = root / "scripts/run_compiled_benchmark_remote.sh"
+        compiled_runner = compiled_path.read_text()
         service = (root / "scripts/bfgs-benchmark.service").read_text()
         assert "bfgs-g4-ready" in startup
         assert "bfgs-g4-failed" in startup
@@ -68,6 +70,10 @@ class TestGcpLauncher:
         assert "--state_file" in runner
         assert "timing-state.json" in runner
         assert "WantedBy=multi-user.target" in service
+        assert compiled_path.stat().st_mode & 0o111
+        assert "COMPILED_DONE.json" in compiled_runner
+        assert "report-with-compiled.json" in compiled_runner
+        assert "batched_bfgs.compiled_benchmark" in compiled_runner
 
     def test_benchmark_labels_both_pytorch_implementations(self) -> None:
         """Reports distinguish naive and chunked PyTorch implementations."""

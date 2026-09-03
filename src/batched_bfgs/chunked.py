@@ -154,6 +154,16 @@ class ChunkedVectorizedBfgs(VectorizedBfgs):
         identity: torch.Tensor,
         count: int,
     ) -> _ChunkState:
+        for _iteration in range(count):
+            state = self._run_iteration(state, identity)
+        return state
+
+    def _run_iteration(
+        self,
+        state: _ChunkState,
+        identity: torch.Tensor,
+    ) -> _ChunkState:
+        """Advance every active batch member by one BFGS iteration."""
         (
             x,
             objective,
@@ -165,43 +175,40 @@ class ChunkedVectorizedBfgs(VectorizedBfgs):
             wolfe,
             active,
         ) = state
-        for _iteration in range(count):
-            direction = -torch.bmm(hessian, gradient.unsqueeze(-1)).squeeze(-1)
-            derivative = (gradient * direction).sum(dim=-1)
-            reset = active & (derivative >= 0.0)
-            hessian = torch.where(reset[:, None, None], identity, hessian)
-            direction = torch.where(reset[:, None], -gradient, direction)
-            line = self._strong_wolfe(
-                x,
-                objective,
-                gradient,
-                direction,
-                active,
-            )
-            evaluations = evaluations + line.evaluations
-            accepted = active & line.accepted
-            wolfe = wolfe & (~active | line.accepted)
-            step = line.step[:, None] * direction
-            change = line.gradient - gradient
-            hessian = self._update_hessian(
-                hessian,
-                step,
-                change,
-                accepted,
-                identity,
-            )
-            x = torch.where(accepted[:, None], x + step, x)
-            objective = torch.where(accepted, line.objective, objective)
-            gradient = torch.where(accepted[:, None], line.gradient, gradient)
-            iterations = iterations + accepted.to(iterations.dtype)
-            newly_converged = accepted & (
-                self._norm(gradient) <= self._config.tolerance
-            )
-            converged = converged | newly_converged
-            stagnant = accepted & (
-                self._norm(step) <= self._config.step_tolerance
-            )
-            active = accepted & ~converged & ~stagnant
+        direction = -torch.bmm(hessian, gradient.unsqueeze(-1)).squeeze(-1)
+        derivative = (gradient * direction).sum(dim=-1)
+        reset = active & (derivative >= 0.0)
+        hessian = torch.where(reset[:, None, None], identity, hessian)
+        direction = torch.where(reset[:, None], -gradient, direction)
+        line = self._strong_wolfe(
+            x,
+            objective,
+            gradient,
+            direction,
+            active,
+        )
+        evaluations = evaluations + line.evaluations
+        accepted = active & line.accepted
+        wolfe = wolfe & (~active | line.accepted)
+        step = line.step[:, None] * direction
+        change = line.gradient - gradient
+        hessian = self._update_hessian(
+            hessian,
+            step,
+            change,
+            accepted,
+            identity,
+        )
+        x = torch.where(accepted[:, None], x + step, x)
+        objective = torch.where(accepted, line.objective, objective)
+        gradient = torch.where(accepted[:, None], line.gradient, gradient)
+        iterations = iterations + accepted.to(iterations.dtype)
+        newly_converged = accepted & (
+            self._norm(gradient) <= self._config.tolerance
+        )
+        converged = converged | newly_converged
+        stagnant = accepted & (self._norm(step) <= self._config.step_tolerance)
+        active = accepted & ~converged & ~stagnant
         return _ChunkState(
             x,
             objective,
@@ -213,3 +220,32 @@ class ChunkedVectorizedBfgs(VectorizedBfgs):
             wolfe,
             active,
         )
+
+
+class CompiledChunkedVectorizedBfgs(ChunkedVectorizedBfgs):
+    """Compile one tensor-only iteration while keeping chunk control eager."""
+
+    def __init__(
+        self,
+        config: BfgsConfig,
+        objective: TensorObjective | None = None,
+        chunk_size: int = 16,
+    ) -> None:
+        """Initialize an Inductor-compiled fixed-shape optimizer."""
+        super().__init__(config, objective, chunk_size)
+        self._compiled_iteration = torch.compile(
+            self._run_iteration,
+            backend="inductor",
+            fullgraph=True,
+            dynamic=False,
+        )
+
+    def _run_chunk(
+        self,
+        state: _ChunkState,
+        identity: torch.Tensor,
+        count: int,
+    ) -> _ChunkState:
+        for _iteration in range(count):
+            state = self._compiled_iteration(state, identity)
+        return state
