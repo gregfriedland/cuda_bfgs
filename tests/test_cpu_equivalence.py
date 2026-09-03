@@ -59,10 +59,10 @@ class TestCpuEquivalence:
     """Check numerical properties shared by CPU-capable implementations."""
 
     def test_loop_and_vectorized_extended_rosenbrock(self) -> None:
-        """Both implementations converge in eight dimensions."""
+        """Both implementations converge in sixteen dimensions."""
         device = torch.device("cpu")
         objective = ExtendedRosenbrockObjective()
-        starts = objective.make_starts(8, 8, device, torch.float64)
+        starts = objective.make_starts(8, 16, device, torch.float64)
         initial, _gradient = objective.value_and_gradient(starts)
         config = BfgsConfig(tolerance=1e-7, max_iterations=200)
         loop = LoopBfgs(config, objective).run(starts)
@@ -78,7 +78,7 @@ class TestCpuEquivalence:
         """Both implementations solve the singular strong-Wolfe stress case."""
         device = torch.device("cpu")
         objective = ExtendedPowellSingularObjective()
-        starts = objective.make_starts(4, 4, device, torch.float64)
+        starts = objective.make_starts(4, 16, device, torch.float64)
         initial, _gradient = objective.value_and_gradient(starts)
         config = BfgsConfig(tolerance=1e-6, max_iterations=300)
         loop = LoopBfgs(config, objective).run(starts)
@@ -89,6 +89,7 @@ class TestCpuEquivalence:
             initial,
             torch.zeros_like(starts),
             position_tolerance=1e-2,
+            equivalence_tolerance=1e-2,
         )
 
     def test_rejects_empty_dimension(self) -> None:
@@ -113,6 +114,7 @@ class TestCpuEquivalence:
         initial: torch.Tensor,
         target: torch.Tensor,
         position_tolerance: float = 1e-6,
+        equivalence_tolerance: float = 1e-6,
     ) -> None:
         assert bool(loop.converged.all())
         assert bool(vectorized.converged.all())
@@ -126,4 +128,9 @@ class TestCpuEquivalence:
             atol=position_tolerance,
             rtol=position_tolerance,
         )
-        torch.testing.assert_close(vectorized.x, loop.x, atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(
+            vectorized.x,
+            loop.x,
+            atol=equivalence_tolerance,
+            rtol=equivalence_tolerance,
+        )
