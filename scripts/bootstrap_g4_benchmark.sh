@@ -12,4 +12,5 @@ UV_LINK_MODE=copy /usr/local/bin/uv sync --locked --no-dev
 install -m 0644 scripts/bfgs-benchmark.service \
     /etc/systemd/system/bfgs-benchmark.service
 systemctl daemon-reload
-systemctl enable --now bfgs-benchmark.service
+systemctl enable bfgs-benchmark.service
+systemctl start --no-block bfgs-benchmark.service

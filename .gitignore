@@ -5,6 +5,5 @@ __pycache__/
 *.egg-info/
 build/
 dist/
-run_*/logs/*.log
-run_*/status/*.json
+run_*/
 docs/ubiquitin_amber19_implementation_plan.md
