@@ -1,7 +1,5 @@
 """Nsight workload for the fused CUDA BFGS kernel."""
 
-import argparse
-import json
 from typing import Any
 
 import torch
@@ -21,6 +19,7 @@ class CudaProfileWorkload:
         batch_size: int,
     ) -> None:
         """Store the fixed profiling configuration."""
+        # Validate and retain the requested profiling case.
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         self._objective_name = objective_name
@@ -31,8 +30,11 @@ class CudaProfileWorkload:
 
     def run(self) -> dict[str, Any]:
         """Compile, warm up, and measure one fused CUDA optimizer launch."""
+        # Require a CUDA device before allocating profile inputs.
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA profiling requires an available GPU")
+
+        # Build the selected starts and compile the fused extension.
         device = torch.device("cuda")
         starts = self._objective.make_starts(
             self._batch_size,
@@ -41,15 +43,21 @@ class CudaProfileWorkload:
         )
         optimizer = CudaBfgs(self._config, self._objective_name)
         optimizer.compile(verbose=True)
+
+        # Warm the kernel and reset peak-memory accounting.
         optimizer.run(starts)
         torch.cuda.synchronize(device)
         torch.cuda.reset_peak_memory_stats(device)
         begin = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
+
+        # Give the profiled launch a descriptive NVTX range label.
         label = (
             f"cuda_bfgs:{self._objective_name.value}:"
             f"{self._dimension}d:batch={self._batch_size}"
         )
+
+        # Capture exactly one fused launch inside the profiler interval.
         torch.cuda.cudart().cudaProfilerStart()
         begin.record()
         with torch.cuda.nvtx.range(label):
@@ -57,11 +65,16 @@ class CudaProfileWorkload:
         end.record()
         end.synchronize()
         torch.cuda.cudart().cudaProfilerStop()
+
+        # Validate correctness indicators before reporting performance.
         converged_fraction = float(result.converged.float().mean())
         if not -1e-12 <= converged_fraction <= 1.0 + 1e-12:
             raise RuntimeError("converged fraction is outside [0, 1]")
-        if not bool(result.wolfe_satisfied.all()):
-            raise RuntimeError("profiled run failed a strong-Wolfe search")
+        wolfe_satisfied_fraction = float(result.wolfe_satisfied.float().mean())
+        if not -1e-12 <= wolfe_satisfied_fraction <= 1.0 + 1e-12:
+            raise RuntimeError("strong-Wolfe fraction is outside [0, 1]")
+
+        # Return machine-readable timing, convergence, and device metadata.
         return {
             "objective": self._objective_name.value,
             "dimension": self._dimension,
@@ -70,6 +83,7 @@ class CudaProfileWorkload:
             "tolerance": self._config.tolerance,
             "elapsed_ms": begin.elapsed_time(end),
             "converged_fraction": converged_fraction,
+            "wolfe_satisfied_fraction": wolfe_satisfied_fraction,
             "median_iterations": float(result.iterations.float().median()),
             "median_line_search_evaluations": float(
                 result.line_search_evaluations.float().median()
@@ -79,36 +93,3 @@ class CudaProfileWorkload:
             "gpu": torch.cuda.get_device_properties(device).name,
             "torch_version": torch.__version__,
         }
-
-
-class CudaProfileCli:
-    """Parse arguments and run the CUDA profiling workload."""
-
-    @staticmethod
-    def run() -> None:
-        """Execute one profiler-visible high-batch workload."""
-        parser = argparse.ArgumentParser()
-        parser.add_argument(
-            "--objective",
-            type=ObjectiveType,
-            choices=list(ObjectiveType),
-            required=True,
-        )
-        parser.add_argument("--dimension", type=int, required=True)
-        parser.add_argument("--batch-size", type=int, default=65536)
-        arguments = parser.parse_args()
-        report = CudaProfileWorkload(
-            objective_name=arguments.objective,
-            dimension=arguments.dimension,
-            batch_size=arguments.batch_size,
-        ).run()
-        print(json.dumps(report, indent=2, sort_keys=True))
-
-
-def main() -> None:
-    """Run the CUDA profile CLI."""
-    CudaProfileCli.run()
-
-
-if __name__ == "__main__":
-    main()

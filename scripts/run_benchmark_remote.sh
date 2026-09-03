@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Purpose: Run the GPU benchmark with durable attempt and terminal-state markers.
-# Usage: Launched on the G4 VM by bfgs-benchmark.service; do not run locally.
+# Usage: On the G4 VM, run `sudo /opt/batched-bfgs/scripts/run_benchmark_remote.sh`.
 
 set -euo pipefail
 
@@ -51,12 +51,12 @@ for benchmark_case in "${benchmark_cases[@]}"; do
     IFS='|' read -r objective dimension <<<"$benchmark_case"
     case_report="$state_dir/.${objective}-${dimension}d.json.tmp"
     PATH="$PWD/.venv/bin:/usr/local/cuda-12.8/bin:$PATH" \
-        .venv/bin/python -m batched_bfgs.benchmark \
+        .venv/bin/python -m batched_bfgs benchmark \
         --batch-sizes 64 256 4096 65536 \
         --repeats 5 \
         --objective "$objective" \
         --dimension "$dimension" \
-        --state_file "$timing_state" \
+        --state-file "$timing_state" \
         --device cuda >"$case_report" 2>>"$log_path"
     printf '%s' "$separator" >>"$report_tmp"
     cat "$case_report" >>"$report_tmp"

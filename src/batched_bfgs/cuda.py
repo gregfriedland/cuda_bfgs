@@ -27,16 +27,12 @@ class CudaBfgs(Bfgs):
             objective: Analytic objective implemented by the CUDA extension.
 
         """
+        # Store the shared configuration for the single supported objective.
         self._config = config
-        objective_codes = {
-            ObjectiveType.EXTENDED_ROSENBROCK: 0,
-            ObjectiveType.EXTENDED_POWELL: 1,
-        }
+
+        # Reject invalid public inputs before loading the extension.
         if not isinstance(objective, ObjectiveType):
             raise TypeError("objective must be an ObjectiveType")
-        if objective not in objective_codes:
-            raise ValueError(f"unsupported CUDA objective: {objective}")
-        self._objective_code = objective_codes[objective]
         self._extension: ModuleType | None = None
 
     def compile(self, verbose: bool = True) -> None:
@@ -46,16 +42,21 @@ class CudaBfgs(Bfgs):
             verbose: Whether the extension builder should emit build output.
 
         """
+        # Require a visible device before resolving its architecture.
         if not torch.cuda.is_available():
             raise RuntimeError("CudaBfgs requires a CUDA device")
         major, minor = torch.cuda.get_device_capability()
         os.environ["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}"
+
+        # Configure the C++ and CUDA extension sources.
         source_dir = Path(__file__).resolve().parent / "csrc"
         cuda_flags = ["-O3", "-lineinfo"]
         if os.environ.get("BFGS_CUDA_RESOURCE_USAGE") == "1":
             cuda_flags.append("--resource-usage")
+
+        # Compile and load the extension into this process.
         self._extension = load(
-            name="batched_bfgs_cuda_v2",
+            name="batched_bfgs_cuda_v3",
             sources=[
                 str(source_dir / "bfgs.cpp"),
                 str(source_dir / "bfgs_kernel.cu"),
@@ -77,23 +78,25 @@ class CudaBfgs(Bfgs):
             One optimization result per batch member.
 
         """
+        # Validate device, shape, batch size, and numeric type.
         if not starts.is_cuda:
             raise ValueError("starts must be on a CUDA device")
         if starts.ndim != 2 or starts.shape[1] not in (2, 16):
             raise ValueError("starts must have shape [batch, 2] or [batch, 16]")
-        if starts.shape[1] == 2 and self._objective_code != 0:
-            raise ValueError("2D CUDA optimization supports only Rosenbrock")
         if starts.shape[0] == 0:
             raise ValueError("starts must contain at least one batch member")
         if starts.dtype not in (torch.float32, torch.float64):
             raise ValueError("starts must use float32 or float64")
+
+        # Compile lazily and assert that loading succeeded.
         if self._extension is None:
             self.compile()
         if self._extension is None:
             raise RuntimeError("CUDA extension failed to load")
+
+        # Invoke the fused kernel with the shared numerical configuration.
         values = self._extension.optimize(
             starts.contiguous(),
-            self._objective_code,
             self._config.c1,
             self._config.c2,
             self._config.tolerance,

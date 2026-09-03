@@ -48,7 +48,7 @@ for profile_case in "${profile_cases[@]}"; do
         --sample=none \
         --cpuctxsw=none \
         --output="$prefix" \
-        .venv/bin/python -m batched_bfgs.profile_cuda \
+        .venv/bin/python -m batched_bfgs profile-cuda \
         --objective "$objective" \
         --dimension "$dimension" \
         --batch-size 65536 \

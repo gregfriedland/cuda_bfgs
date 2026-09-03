@@ -1,112 +1,44 @@
 # Batched strong-Wolfe BFGS
 
-This repository implements full BFGS with a strong-Wolfe line search using:
+![Rosenbrock 16D benchmark timing comparison](docs/rosenbrock-16d-timings.png)
 
-1. A Python loop over batch members.
-2. Masked batched PyTorch tensor operations.
-3. One fused fixed-dimensional optimization per CUDA thread.
+This repository compares implementations of full-memory BFGS with a
+strong-Wolfe line search. Every optimizer implements the shared `Bfgs`
+interface and returns the same batched result fields, making correctness and
+timing comparisons direct.
 
-The only benchmark objectives are extended Rosenbrock, defined as independent
-two-variable blocks, and extended Powell singular, defined as independent
-four-variable blocks. The Python and PyTorch implementations accept arbitrary
-valid dimensions. The fused CUDA extension supports 2D Rosenbrock plus 16D
-extended Rosenbrock and extended Powell through compiled objective kernels.
+## Implementations
 
-## Local setup
+| Variant | Class | Execution model | Intended use |
+| --- | --- | --- | --- |
+| Python loop | `LoopBfgs` | Runs each batch member independently in Python. | Readable reference implementation and correctness baseline. |
+| PyTorch (naive) | `VectorizedBfgs` | Uses masked batched tensor operations. | Simple tensor implementation. |
+| PyTorch (chunked) | `ChunkedVectorizedBfgs` | Runs several tensor iterations before checking convergence. CUDA checks copy one reduced activity flag to pinned host memory on a separate stream. | Reduces CPU/GPU synchronization while preserving eager PyTorch control flow. |
+| PyTorch (compiled chunked) | `CompiledChunkedVectorizedBfgs` | Compiles one fixed-shape tensor iteration with TorchInductor while keeping chunk and event control eager. | Measures steady-state compiled performance when batch shape and optimizer settings remain stable. Compilation latency is reported separately. |
+| Fused CUDA | `CudaBfgs` | Assigns one complete fixed-dimensional optimization to each CUDA thread, including its line search and inverse-Hessian state. | Maximum fusion and explicit per-thread memory control for supported dimensions. |
 
-```bash
-/opt/homebrew/bin/uv sync --locked --all-groups
-```
+The loop and PyTorch variants store a full inverse Hessian for every batch
+member. The fused kernel instead keeps the optimization inside one CUDA launch;
+this removes repeated framework launches but constrains dimensions and increases
+per-thread register or local-memory pressure.
 
-Run an extended Rosenbrock benchmark in 16 dimensions:
+## Current scope
 
-```bash
-/opt/homebrew/bin/uv run --locked --no-sync bfgs-benchmark \
-  --objective extended_rosenbrock \
-  --dimension 16 \
-  --device cpu
-```
+The benchmark defaults to 16-dimensional extended Rosenbrock: eight independent
+two-variable Rosenbrock blocks with a known all-ones minimizer. The Python and
+PyTorch implementations accept any positive even dimension. The fused CUDA
+kernel accepts 2D and 16D inputs.
 
-Switch to the extended Powell singular strong-Wolfe stress case:
+The package exposes two top-level commands:
 
-```bash
-/opt/homebrew/bin/uv run --locked --no-sync bfgs-benchmark \
-  --objective extended_powell \
-  --dimension 16 \
-  --device cpu
-```
+- `batched-bfgs benchmark` runs the standard implementation matrix; add
+  `--compiled` to run the compiled chunked variant instead.
+- `batched-bfgs profile-cuda` runs one warmed fused-CUDA workload with an NVTX
+  range for profiling.
 
-Use `--device cuda` with either 16D objective to include its fused CUDA kernel.
+## Documentation
 
-## Local and remote CI checks
-
-### Local checks
-
-The shared check script updates `.venv` from `uv.lock`, then runs Ruff linting,
-Ruff's formatting check, and ty type checking:
-
-```bash
-./scripts/check.sh
-```
-
-Run the unit tests separately:
-
-```bash
-/opt/homebrew/bin/uv run --locked --no-sync pytest -q
-```
-
-Enable the tracked pre-push hook once per clone:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-### Remote checks
-
-GitHub Actions runs the same `./scripts/check.sh` command for every push and
-pull request. View results on the
-[Static checks Actions page](https://github.com/gregfriedland/cuda_bfgs/actions/workflows/static-checks.yml).
-
-```bash
-gh run list --workflow static-checks.yml --limit 5
-```
-
-## GCP Spot VM
-
-Create a full-GPU `g4-standard-48` Spot VM. The manager requires a project and
-authenticated gcloud account, and defaults to region `us-east5`.
-
-```bash
-.venv/bin/python -m scripts.manage_g4_spot_vm create \
-  --project PROJECT_ID \
-  --account ACCOUNT \
-  --region us-east5
-```
-
-The VM uses a 50 GB Hyperdisk Balanced boot disk and Ubuntu 24.04. Spot
-preemption stops the VM, and the boot disk remains available with auto-delete
-disabled. The preserved disk continues to incur storage charges.
-
-Preview create arguments without provisioning a VM:
-
-```bash
-.venv/bin/python -m scripts.manage_g4_spot_vm create \
-  --project PROJECT_ID \
-  --account ACCOUNT \
-  --zone us-east5-a \
-  --dry-run
-```
-
-Stop the VM while preserving its boot disk, then start it again:
-
-```bash
-.venv/bin/python -m scripts.manage_g4_spot_vm stop --project PROJECT_ID --account ACCOUNT
-.venv/bin/python -m scripts.manage_g4_spot_vm start --project PROJECT_ID --account ACCOUNT
-```
-
-VM bootstrap installs but disables `bfgs-benchmark.service`. Run the benchmark
-manually on the VM with:
-
-```bash
-sudo /opt/batched-bfgs/scripts/run_benchmark_remote.sh
-```
+- [How to run](docs/how-to-run.md): local setup, standard and compiled
+  benchmarks, CUDA profiling, and GCP Spot VM infrastructure.
+- [Static checks](docs/static-checks.md): linting, formatting, type checking,
+  tests, the pre-push hook, and GitHub Actions.

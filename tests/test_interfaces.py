@@ -1,12 +1,15 @@
 """Contracts shared by objectives and BFGS implementations."""
 
 import inspect
+import subprocess
+import sys
 from typing import cast
 
 import pytest
 import torch
 from pydantic import ValidationError
 
+from batched_bfgs.__main__ import Cli
 from batched_bfgs.base import Bfgs
 from batched_bfgs.chunked import (
     ChunkedVectorizedBfgs,
@@ -16,7 +19,6 @@ from batched_bfgs.cuda import CudaBfgs
 from batched_bfgs.loop import LoopBfgs
 from batched_bfgs.models import BfgsConfig
 from batched_bfgs.objective import (
-    ExtendedPowellSingularObjective,
     ExtendedRosenbrockObjective,
     ObjectiveType,
     TensorObjective,
@@ -51,14 +53,11 @@ class TestBfgsInterface:
         """Every analytic objective satisfies the shared abstract contract."""
         assert inspect.isabstract(TensorObjective)
         assert issubclass(ExtendedRosenbrockObjective, TensorObjective)
-        assert issubclass(ExtendedPowellSingularObjective, TensorObjective)
 
     def test_objective_dimensions_use_pydantic_validation(self) -> None:
         """Invalid objective dimensions fail during model construction."""
         with pytest.raises(ValidationError, match="positive and even"):
             ExtendedRosenbrockObjective(dimension=3)
-        with pytest.raises(ValidationError, match="multiple of four"):
-            ExtendedPowellSingularObjective(dimension=6)
 
 
 class TestObjectiveType:
@@ -80,17 +79,10 @@ class TestObjectiveType:
     def test_enum_constructs_objectives_with_owned_minimizers(self) -> None:
         """The enum selects a class whose minimizer behavior stays local."""
         rosenbrock = ObjectiveType.EXTENDED_ROSENBROCK.create(16)
-        powell = ObjectiveType.EXTENDED_POWELL.create(16)
-
         assert isinstance(rosenbrock, ExtendedRosenbrockObjective)
-        assert isinstance(powell, ExtendedPowellSingularObjective)
         assert torch.equal(
             rosenbrock.minimizer(torch.empty(2, 16)),
             torch.ones(2, 16),
-        )
-        assert torch.equal(
-            powell.minimizer(torch.empty(2, 16)),
-            torch.zeros(2, 16),
         )
 
     def test_timing_cache_loads_legacy_string(self) -> None:
@@ -109,3 +101,32 @@ class TestObjectiveType:
         assert configuration.objective is ObjectiveType.EXTENDED_ROSENBROCK
         serialized = configuration.model_dump_json()
         assert '"objective":"extended_rosenbrock"' in serialized
+
+
+class TestPackageCli:
+    """Check the unified package command structure."""
+
+    @pytest.mark.parametrize(
+        "command",
+        ("benchmark", "profile-cuda"),
+    )
+    def test_subcommand_help(self, command: str) -> None:
+        """Every workload is exposed through the package entry point."""
+        result = subprocess.run(
+            [sys.executable, "-m", "batched_bfgs", command, "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        assert f"usage: batched-bfgs {command}" in result.stdout
+
+    def test_default_dimension_is_sixteen(self) -> None:
+        """Benchmark and profile commands default to the active 16D scope."""
+        benchmark = Cli._parser().parse_args(["benchmark"])
+        profile = Cli._parser().parse_args(
+            ["profile-cuda", "--objective", "extended_rosenbrock"]
+        )
+
+        assert benchmark.dimension == 16
+        assert profile.dimension == 16

@@ -1,7 +1,5 @@
 """GPU benchmark for the compiled chunked PyTorch BFGS implementation."""
 
-import argparse
-import json
 import statistics
 import time
 from pathlib import Path
@@ -35,10 +33,13 @@ class CompiledBenchmarkRunner:
         chunk_size: int = 16,
     ) -> None:
         """Initialize one compiled benchmark case."""
+        # Validate the requested fixed-shape timing matrix.
         if not batch_sizes or min(batch_sizes) <= 0:
             raise ValueError("batch_sizes must contain positive values")
         if repeats < 3:
             raise ValueError("repeats must be at least three")
+
+        # Store benchmark settings and construct the analytic objective.
         self._batch_sizes = batch_sizes
         self._repeats = repeats
         self._objective_name = objective_name
@@ -49,10 +50,13 @@ class CompiledBenchmarkRunner:
 
     def run(self, device: torch.device, state_path: Path) -> dict[str, Any]:
         """Run GPU parity checks and steady-state timings."""
+        # Require an available CUDA device for Inductor GPU compilation.
         if device.type != "cuda" or not torch.cuda.is_available():
             raise ValueError(
                 "compiled benchmark requires an available CUDA GPU"
             )
+
+        # Validate parity and initialize the persistent timing matrix.
         correctness = self._check_correctness(device)
         cache = TimingCache(state_path)
         configurations = [
@@ -62,6 +66,8 @@ class CompiledBenchmarkRunner:
         cache.initialize(
             [(configuration, True) for configuration in configurations]
         )
+
+        # Reuse cached cases and time each remaining configuration.
         timings = []
         for configuration in configurations:
             cached = cache.timing(configuration)
@@ -72,6 +78,8 @@ class CompiledBenchmarkRunner:
             if cached is None:
                 cache.record(configuration, timing)
             timings.append(timing)
+
+        # Return correctness, timing, and compilation metadata.
         return {
             "device": torch.cuda.get_device_properties(device).name,
             "torch_version": torch.__version__,
@@ -91,6 +99,7 @@ class CompiledBenchmarkRunner:
         batch_size: int,
     ) -> TimingConfiguration:
         """Build the cache identity for one compiled timing."""
+        # Include every input that can alter compilation or runtime.
         return TimingConfiguration(
             objective=self._objective_name,
             dimension=self._dimension,
@@ -107,6 +116,7 @@ class CompiledBenchmarkRunner:
 
     def _check_correctness(self, device: torch.device) -> dict[str, Any]:
         """Validate compiled results against the eager chunked optimizer."""
+        # Build one deterministic batch for eager-versus-compiled parity.
         starts = self._objective.make_starts(
             16,
             device,
@@ -122,6 +132,8 @@ class CompiledBenchmarkRunner:
             self._objective,
             self._chunk_size,
         ).run(starts)
+
+        # Compare all public numerical and status outputs.
         parity_tolerance = 5.0 * self._config.tolerance
         torch.testing.assert_close(
             compiled.x,
@@ -146,6 +158,8 @@ class CompiledBenchmarkRunner:
             compiled.wolfe_satisfied,
             eager.wolfe_satisfied,
         )
+
+        # Validate the compiled result against the analytic minimizer.
         target = self._objective.minimizer(starts)
         BenchmarkRunner._assert_result(
             self.implementation,
@@ -156,6 +170,8 @@ class CompiledBenchmarkRunner:
             if self._objective_name is ObjectiveType.EXTENDED_ROSENBROCK
             else 1e-2,
         )
+
+        # Return detailed parity and convergence diagnostics.
         return {
             "batch_size": 16,
             "dtype": "float32",
@@ -178,9 +194,12 @@ class CompiledBenchmarkRunner:
         batch_size: int,
     ) -> dict[str, Any]:
         """Measure compilation overhead and steady-state GPU timing."""
+        # Reset compiler and memory counters for this fixed shape.
         torch.compiler.reset()
         counters.clear()
         torch.cuda.reset_peak_memory_stats(device)
+
+        # Construct inputs and a fresh compiled optimizer instance.
         starts = self._objective.make_starts(
             batch_size,
             device,
@@ -191,16 +210,22 @@ class CompiledBenchmarkRunner:
             self._objective,
             self._chunk_size,
         )
+
+        # Time the first call, which includes compilation overhead.
         torch.cuda.synchronize(device)
         first_begin = time.perf_counter()
         optimizer.run(starts)
         torch.cuda.synchronize(device)
         first_run_ms = (time.perf_counter() - first_begin) * 1000.0
+
+        # Warm the compiled graph before recording steady-state counters.
         optimizer.run(starts)
         optimizer.run(starts)
         torch.cuda.synchronize(device)
         graphs_before = self._counter("stats", "unique_graphs")
         breaks_before = self._graph_breaks()
+
+        # Measure repeated execution with CUDA device events.
         elapsed_ms = []
         result: OptimizationResult | None = None
         for _repeat in range(self._repeats):
@@ -211,6 +236,8 @@ class CompiledBenchmarkRunner:
             end.record()
             end.synchronize()
             elapsed_ms.append(begin.elapsed_time(end))
+
+        # Reject recompilation or graph breaks inside the timed region.
         new_graphs = self._counter("stats", "unique_graphs") - graphs_before
         graph_breaks = self._graph_breaks() - breaks_before
         if new_graphs != 0 or graph_breaks != 0:
@@ -218,12 +245,16 @@ class CompiledBenchmarkRunner:
                 "compiled timing triggered new graphs or graph breaks: "
                 f"new_graphs={new_graphs}, graph_breaks={graph_breaks}"
             )
+
+        # Validate execution and bounded convergence statistics.
         if result is None:
             raise RuntimeError("compiled benchmark did not execute")
         median_ms = statistics.median(elapsed_ms)
         converged_fraction = float(result.converged.float().mean())
         if not -1e-12 <= converged_fraction <= 1.0 + 1e-12:
             raise RuntimeError("converged fraction is outside [0, 1]")
+
+        # Return compilation cost, runtime, throughput, and memory metrics.
         return {
             "implementation": self.implementation,
             "batch_size": batch_size,
@@ -250,40 +281,3 @@ class CompiledBenchmarkRunner:
     def _graph_breaks() -> int:
         """Return the total recorded TorchDynamo graph breaks."""
         return sum(int(value) for value in counters["graph_break"].values())
-
-
-class CompiledBenchmarkCli:
-    """Parse command-line arguments for one compiled benchmark case."""
-
-    @staticmethod
-    def run() -> None:
-        """Execute the compiled GPU benchmark."""
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--batch-sizes", nargs="+", type=int, required=True)
-        parser.add_argument("--repeats", type=int, default=5)
-        parser.add_argument(
-            "--objective",
-            type=ObjectiveType,
-            choices=list(ObjectiveType),
-            required=True,
-        )
-        parser.add_argument("--dimension", type=int, required=True)
-        parser.add_argument("--device", default="cuda")
-        parser.add_argument("--state-file", type=Path, required=True)
-        arguments = parser.parse_args()
-        report = CompiledBenchmarkRunner(
-            batch_sizes=arguments.batch_sizes,
-            repeats=arguments.repeats,
-            objective_name=arguments.objective,
-            dimension=arguments.dimension,
-        ).run(torch.device(arguments.device), arguments.state_file)
-        print(json.dumps(report, indent=2, sort_keys=True))
-
-
-def main() -> None:
-    """Run the compiled benchmark CLI."""
-    CompiledBenchmarkCli.run()
-
-
-if __name__ == "__main__":
-    main()

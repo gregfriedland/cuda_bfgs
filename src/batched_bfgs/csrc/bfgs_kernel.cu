@@ -46,33 +46,6 @@ struct ExtendedRosenbrock {
   }
 };
 
-struct ExtendedPowell {
-  template <typename scalar_t, int dimension>
-  __device__ static void evaluate(
-      const scalar_t* x, scalar_t& value, scalar_t* gradient) {
-    value = scalar_t(0);
-#pragma unroll
-    for (int index = 0; index < dimension; index += 4) {
-      const scalar_t first = x[index] + scalar_t(10) * x[index + 1];
-      const scalar_t second = x[index + 2] - x[index + 3];
-      const scalar_t third = x[index + 1] - scalar_t(2) * x[index + 2];
-      const scalar_t fourth = x[index] - x[index + 3];
-      const scalar_t third2 = third * third;
-      const scalar_t fourth2 = fourth * fourth;
-      value += first * first + scalar_t(5) * second * second +
-          third2 * third2 + scalar_t(10) * fourth2 * fourth2;
-      gradient[index] = scalar_t(2) * first +
-          scalar_t(40) * fourth2 * fourth;
-      gradient[index + 1] = scalar_t(20) * first +
-          scalar_t(4) * third2 * third;
-      gradient[index + 2] = scalar_t(10) * second -
-          scalar_t(8) * third2 * third;
-      gradient[index + 3] = -scalar_t(10) * second -
-          scalar_t(40) * fourth2 * fourth;
-    }
-  }
-};
-
 template <typename scalar_t, int dimension>
 __device__ inline scalar_t dot(const scalar_t* first, const scalar_t* second) {
   scalar_t result = scalar_t(0);
@@ -465,7 +438,6 @@ void dispatch_kernel(
     torch::Tensor& output_evaluations,
     torch::Tensor& output_converged,
     torch::Tensor& output_wolfe,
-    std::int64_t objective,
     scalar_t c1,
     scalar_t c2,
     scalar_t tolerance,
@@ -482,14 +454,8 @@ void dispatch_kernel(
         output_evaluations, output_converged, output_wolfe, c1, c2, tolerance,
         step_tolerance, curvature_epsilon, initial_step, maximum_step,
         max_iterations, max_bracket_iterations, max_zoom_iterations);
-  } else if (objective == 0) {
-    launch_kernel<scalar_t, 16, ExtendedRosenbrock>(
-        starts, output_x, output_value, output_gradient, output_iterations,
-        output_evaluations, output_converged, output_wolfe, c1, c2, tolerance,
-        step_tolerance, curvature_epsilon, initial_step, maximum_step,
-        max_iterations, max_bracket_iterations, max_zoom_iterations);
   } else {
-    launch_kernel<scalar_t, 16, ExtendedPowell>(
+    launch_kernel<scalar_t, 16, ExtendedRosenbrock>(
         starts, output_x, output_value, output_gradient, output_iterations,
         output_evaluations, output_converged, output_wolfe, c1, c2, tolerance,
         step_tolerance, curvature_epsilon, initial_step, maximum_step,
@@ -501,7 +467,6 @@ void dispatch_kernel(
 
 std::vector<torch::Tensor> optimize_cuda(
     torch::Tensor starts,
-    std::int64_t objective,
     double c1,
     double c2,
     double tolerance,
@@ -533,8 +498,8 @@ std::vector<torch::Tensor> optimize_cuda(
     const auto scalar_maximum_step = static_cast<scalar_t>(maximum_step);
     dispatch_kernel<scalar_t>(
         starts, output_x, output_value, output_gradient, output_iterations,
-        output_evaluations, output_converged, output_wolfe, objective,
-        scalar_c1, scalar_c2, scalar_tolerance, scalar_step_tolerance,
+        output_evaluations, output_converged, output_wolfe, scalar_c1,
+        scalar_c2, scalar_tolerance, scalar_step_tolerance,
         scalar_curvature_epsilon, scalar_initial_step, scalar_maximum_step,
         static_cast<int>(max_iterations),
         static_cast<int>(max_bracket_iterations),

@@ -29,12 +29,17 @@ class BfgsConfig(BaseModelNoExtra):
     @model_validator(mode="after")
     def _validate_values(self) -> Self:
         """Validate the numerical configuration."""
+        # Enforce the strong-Wolfe coefficient ordering.
         if not 0.0 < self.c1 < self.c2 < 1.0:
             raise ValueError("Require 0 < c1 < c2 < 1")
+
+        # Enforce valid line-search step bounds.
         if self.initial_step <= 0.0:
             raise ValueError("initial_step must be positive")
         if self.maximum_step < self.initial_step:
             raise ValueError("maximum_step must be at least initial_step")
+
+        # Require every configured iteration budget to be usable.
         if min(self.max_iterations, self.max_zoom_iterations) <= 0:
             raise ValueError("iteration limits must be positive")
         if self.max_bracket_iterations <= 0:

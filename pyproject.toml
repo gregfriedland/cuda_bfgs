@@ -22,7 +22,7 @@ dev = [
 ]
 
 [project.scripts]
-bfgs-benchmark = "batched_bfgs.benchmark:main"
+batched-bfgs = "batched_bfgs.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/batched_bfgs"]

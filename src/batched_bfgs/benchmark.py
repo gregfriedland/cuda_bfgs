@@ -1,7 +1,5 @@
 """Correctness and timing harness for the BFGS implementations."""
 
-import argparse
-import json
 import statistics
 import time
 from collections.abc import Callable
@@ -41,20 +39,27 @@ class BenchmarkRunner:
         loop_max_batch: int = 256,
     ) -> None:
         """Initialize the benchmark."""
+        # Validate the timing matrix before storing benchmark settings.
         if not batch_sizes or min(batch_sizes) <= 0:
             raise ValueError("batch_sizes must contain positive values")
         if repeats < 3:
             raise ValueError("repeats must be at least three")
+
+        # Store the requested matrix and its execution limits.
         self._batch_sizes = batch_sizes
         self._repeats = repeats
         self._objective_name = objective_name
         self._dimension = dimension
         self._loop_max_batch = loop_max_batch
+
+        # Build separate strict-correctness and timing configurations.
         self._correctness_config = BfgsConfig(max_iterations=300)
         self._timing_config = BfgsConfig(
             tolerance=1e-4,
             max_iterations=300,
         )
+
+        # Construct and validate the selected analytic objective.
         self._objective = objective_name.create(dimension)
         self._objective.make_starts(
             1,
@@ -68,13 +73,18 @@ class BenchmarkRunner:
         state_path: Path | None = None,
     ) -> dict[str, Any]:
         """Run correctness checks followed by timing."""
+        # Reject unavailable CUDA requests before constructing implementations.
         if device.type == "cuda" and not torch.cuda.is_available():
             raise ValueError("CUDA was requested but is unavailable")
+
+        # Validate implementations with the stricter correctness settings.
         correctness_cuda = self._cuda_implementation(
             device,
             self._correctness_config,
         )
         correctness = self._check_correctness(device, correctness_cuda)
+
+        # Build the timing matrix and initialize any persistent cache.
         cuda = self._cuda_implementation(device, self._timing_config)
         cache = TimingCache(state_path) if state_path is not None else None
         planned = self._planned_timings(device, cuda)
@@ -85,6 +95,8 @@ class BenchmarkRunner:
                     for configuration, implementation, _starts in planned
                 ],
             )
+
+        # Reuse cached timings and execute every remaining supported case.
         records: list[dict[str, Any]] = []
         for configuration, implementation, starts in planned:
             if implementation is None:
@@ -98,6 +110,8 @@ class BenchmarkRunner:
             if cache is not None and cached is None:
                 cache.record(configuration, timing)
             records.append(timing)
+
+        # Return correctness, timing, and environment metadata.
         return {
             "device": self._device_name(device),
             "torch_version": torch.__version__,
@@ -109,8 +123,7 @@ class BenchmarkRunner:
             "cuda_kernel_constraint": None
             if cuda is not None
             else (
-                "the fused CUDA kernels support 2D Rosenbrock and 16D "
-                "extended Rosenbrock/Powell"
+                "the fused CUDA kernels support 2D and 16D extended Rosenbrock"
             ),
             "correctness": correctness,
             "timings": records,
@@ -128,6 +141,7 @@ class BenchmarkRunner:
         ]
     ]:
         """Create the complete desired and skipped timing matrix."""
+        # Enumerate every batch and implementation, including unsupported cells.
         planned = []
         device_name = self._device_name(device)
         for batch_size in self._batch_sizes:
@@ -148,6 +162,8 @@ class BenchmarkRunner:
                 planned.append(
                     (configuration, implementations.get(name), starts)
                 )
+
+        # Preserve the full matrix so the cache can track pending cases.
         return planned
 
     def make_starts(
@@ -157,6 +173,7 @@ class BenchmarkRunner:
         dtype: torch.dtype,
     ) -> torch.Tensor:
         """Create starts for this runner's objective and dimension."""
+        # Delegate construction to the validated objective model.
         return self._objective.make_starts(
             batch_size,
             device,
@@ -169,6 +186,7 @@ class BenchmarkRunner:
         config: BfgsConfig,
     ) -> CudaBfgs | None:
         """Create a compatible CUDA implementation when available."""
+        # Restrict the extension to objective-dimension pairs it implements.
         compatible = device.type == "cuda" and (
             self._dimension == 16
             or (
@@ -178,6 +196,8 @@ class BenchmarkRunner:
         )
         if not compatible:
             return None
+
+        # Compile the compatible kernel once for this benchmark phase.
         cuda = CudaBfgs(config, self._objective_name)
         cuda.compile(verbose=False)
         return cuda
@@ -188,6 +208,7 @@ class BenchmarkRunner:
         cuda: CudaBfgs | None,
     ) -> dict[str, Any]:
         """Validate all compatible implementations against known solutions."""
+        # Evaluate a deterministic float64 batch with all PyTorch strategies.
         starts = self.make_starts(16, device, torch.float64)
         initial, _gradient = self._objective.value_and_gradient(starts)
         loop = LoopBfgs(self._correctness_config, self._objective).run(starts)
@@ -199,6 +220,8 @@ class BenchmarkRunner:
             self._correctness_config,
             self._objective,
         ).run(starts)
+
+        # Add the fused CUDA result only when the case is supported.
         results = [
             (Implementation.PYTHON_LOOP.value, loop),
             (Implementation.PYTORCH_NAIVE.value, vectorized),
@@ -206,6 +229,8 @@ class BenchmarkRunner:
         ]
         if cuda is not None:
             results.append((Implementation.CUDA_KERNEL.value, cuda.run(starts)))
+
+        # Validate each implementation against the analytic minimizer.
         target = self._objective.minimizer(starts)
         target_tolerance = (
             1e-4
@@ -220,6 +245,8 @@ class BenchmarkRunner:
                 target,
                 target_tolerance,
             )
+
+        # Select objective-specific cross-implementation tolerances.
         equivalence_tolerance = 2.0 * target_tolerance
         if self._objective_name is ObjectiveType.EXTENDED_ROSENBROCK:
             equivalence_tolerance = target_tolerance
@@ -228,6 +255,8 @@ class BenchmarkRunner:
             and self._dimension == 2
         ):
             equivalence_tolerance = 1e-6
+
+        # Compare both tensor implementations with the loop reference.
         torch.testing.assert_close(
             vectorized.x,
             loop.x,
@@ -245,6 +274,8 @@ class BenchmarkRunner:
             maximum_error,
             float((chunked.x - loop.x).abs().amax()),
         )
+
+        # Include the fused kernel in parity checks when available.
         if cuda is not None:
             kernel = results[-1][1]
             torch.testing.assert_close(
@@ -257,6 +288,8 @@ class BenchmarkRunner:
                 maximum_error,
                 float((kernel.x - loop.x).abs().amax()),
             )
+
+        # Summarize the strict correctness pass.
         return {
             "batch_size": 16,
             "dtype": "float64",
@@ -271,6 +304,7 @@ class BenchmarkRunner:
         batch_size: int,
     ) -> dict[str, Callable[[torch.Tensor], OptimizationResult]]:
         """Create implementations desired for one batch size."""
+        # Construct tensor implementations for every requested batch size.
         implementations = {
             Implementation.PYTORCH_NAIVE.value: VectorizedBfgs(
                 self._timing_config,
@@ -281,6 +315,8 @@ class BenchmarkRunner:
                 self._objective,
             ).run,
         }
+
+        # Add optional implementations under their supported constraints.
         if cuda is not None:
             implementations[Implementation.CUDA_KERNEL.value] = cuda.run
         if batch_size <= self._loop_max_batch:
@@ -297,9 +333,12 @@ class BenchmarkRunner:
         starts: torch.Tensor,
     ) -> dict[str, Any]:
         """Measure one warmed implementation and summarize its result."""
+        # Warm lazy kernels and initialize repeat-level measurement state.
         implementation(starts)
         elapsed_ms: list[float] = []
         result: OptimizationResult | None = None
+
+        # Use device events on CUDA and wall-clock timing on CPU.
         for _repeat in range(self._repeats):
             if starts.device.type == "cuda":
                 begin = torch.cuda.Event(enable_timing=True)
@@ -313,12 +352,16 @@ class BenchmarkRunner:
                 begin_time = time.perf_counter()
                 result = implementation(starts)
                 elapsed_ms.append((time.perf_counter() - begin_time) * 1000.0)
+
+        # Validate execution and bounded convergence statistics.
         if result is None:
             raise RuntimeError("benchmark did not execute")
         median_ms = statistics.median(elapsed_ms)
         converged_fraction = float(result.converged.float().mean())
         if not -1e-12 <= converged_fraction <= 1.0 + 1e-12:
             raise RuntimeError("converged fraction is outside [0, 1]")
+
+        # Return the median runtime and throughput summary.
         return {
             "implementation": name,
             "batch_size": starts.shape[0],
@@ -338,6 +381,7 @@ class BenchmarkRunner:
         target_tolerance: float,
     ) -> None:
         """Assert numerical correctness for one optimization result."""
+        # Require finite, non-increasing objectives and successful searches.
         if not bool(torch.isfinite(result.x).all()):
             raise AssertionError(f"{name} produced non-finite coordinates")
         if not bool(torch.isfinite(result.objective).all()):
@@ -346,11 +390,15 @@ class BenchmarkRunner:
             raise AssertionError(f"{name} increased an objective")
         if not bool(result.wolfe_satisfied.all()):
             raise AssertionError(f"{name} failed a strong-Wolfe line search")
+
+        # Report the maximum residual when convergence fails.
         if not bool(result.converged.all()):
             maximum_gradient = float(result.gradient.abs().amax())
             raise AssertionError(
                 f"{name} did not converge; max gradient={maximum_gradient}",
             )
+
+        # Compare the converged coordinates with the analytic solution.
         torch.testing.assert_close(
             result.x,
             target,
@@ -364,45 +412,3 @@ class BenchmarkRunner:
         if device.type == "cuda":
             return torch.cuda.get_device_properties(device).name
         return str(device)
-
-
-class BenchmarkCli:
-    """Parse command-line arguments and run an analytic benchmark."""
-
-    @staticmethod
-    def run() -> None:
-        """Execute the command-line benchmark."""
-        parser = argparse.ArgumentParser()
-        parser.add_argument(
-            "--batch-sizes",
-            nargs="+",
-            type=int,
-            default=[64, 256, 4096, 65536],
-        )
-        parser.add_argument("--repeats", type=int, default=5)
-        parser.add_argument(
-            "--objective",
-            type=ObjectiveType,
-            choices=list(ObjectiveType),
-            default=ObjectiveType.EXTENDED_ROSENBROCK,
-        )
-        parser.add_argument("--dimension", type=int, default=16)
-        parser.add_argument("--device", default="cuda")
-        parser.add_argument("--state_file", type=Path)
-        arguments = parser.parse_args()
-        report = BenchmarkRunner(
-            batch_sizes=arguments.batch_sizes,
-            repeats=arguments.repeats,
-            objective_name=arguments.objective,
-            dimension=arguments.dimension,
-        ).run(torch.device(arguments.device), arguments.state_file)
-        print(json.dumps(report, indent=2, sort_keys=True))
-
-
-def main() -> None:
-    """Run the benchmark CLI."""
-    BenchmarkCli.run()
-
-
-if __name__ == "__main__":
-    main()

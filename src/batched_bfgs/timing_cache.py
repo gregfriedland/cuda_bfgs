@@ -28,6 +28,7 @@ class TimingConfiguration(BaseModelNoExtra):
     @property
     def key(self) -> str:
         """Stable, human-readable state key."""
+        # Build the identity shared by eager and CUDA timings.
         fields = (
             self.objective,
             str(self.dimension),
@@ -38,6 +39,8 @@ class TimingConfiguration(BaseModelNoExtra):
             f"{self.tolerance:.17g}",
             str(self.repeats),
         )
+
+        # Extend compiled identities with compiler-specific inputs.
         if self.compile_mode is not None:
             fields += (
                 self.torch_version or "unknown-torch",
@@ -67,6 +70,7 @@ class TimingRecord(BaseModelNoExtra):
     @model_validator(mode="after")
     def _validate_metrics(self) -> Self:
         """Validate all recorded timing metrics."""
+        # Require every core metric to be finite.
         values = (
             self.median_ms,
             self.members_per_second,
@@ -75,10 +79,14 @@ class TimingRecord(BaseModelNoExtra):
         )
         if not all(math.isfinite(value) for value in values):
             raise ValueError("timing metrics must be finite")
+
+        # Enforce positive elapsed time and bounded convergence.
         if self.median_ms <= 0.0:
             raise ValueError("median_ms must be positive")
         if not -1e-12 <= self.converged_fraction <= 1.0 + 1e-12:
             raise ValueError("converged_fraction is outside tolerance")
+
+        # Validate optional compiler and memory metrics when present.
         optional_values = (
             self.first_run_ms,
             self.estimated_compile_overhead_ms,
@@ -107,12 +115,14 @@ class TimingCacheState(BaseModelNoExtra):
     @model_validator(mode="after")
     def _validate_keys(self) -> Self:
         """Validate configuration keys and timing identities."""
+        # Cross-check every key against its stored configuration.
         for key, entry in self.configurations.items():
             if key != entry.configuration.key:
                 raise ValueError(
                     "timing cache key does not match configuration"
                 )
             if isinstance(entry.timing, TimingRecord):
+                # Ensure each timing belongs to its configuration.
                 if (
                     entry.timing.implementation
                     != entry.configuration.implementation
@@ -130,6 +140,7 @@ class TimingCache:
 
     def __init__(self, path: Path) -> None:
         """Load an existing cache or initialize an empty state."""
+        # Validate existing JSON or create an empty schema.
         self._path = path
         self._state = (
             TimingCacheState.model_validate_json(path.read_text())
@@ -142,6 +153,7 @@ class TimingCache:
         configurations: list[tuple[TimingConfiguration, bool]],
     ) -> None:
         """Record the complete desired and skipped configuration matrix."""
+        # Merge the desired matrix with reusable completed timings.
         entries = dict(self._state.configurations)
         for configuration, desired in configurations:
             existing = entries.get(configuration.key)
@@ -157,6 +169,8 @@ class TimingCache:
                 configuration=configuration,
                 timing=timing,
             )
+
+        # Validate and atomically persist the merged state.
         self._state = TimingCacheState(configurations=entries)
         self._write()
 
@@ -164,6 +178,7 @@ class TimingCache:
         self, configuration: TimingConfiguration
     ) -> dict[str, Any] | None:
         """Return a cached desired timing, or ``None`` when it must run."""
+        # Distinguish skipped, pending, and completed configurations.
         entry = self._state.configurations[configuration.key]
         if entry.timing == "not_desired":
             raise ValueError("not-desired configurations cannot be timed")
@@ -177,10 +192,13 @@ class TimingCache:
         timing: dict[str, Any],
     ) -> None:
         """Persist one completed timing before the next configuration runs."""
+        # Require an existing timing slot that is eligible to run.
         entries = dict(self._state.configurations)
         existing = entries.get(configuration.key)
         if existing is None or existing.timing == "not_desired":
             raise ValueError("configuration is not pending a timing")
+
+        # Validate the result and replace its pending entry.
         entries[configuration.key] = TimingCacheEntry(
             configuration=configuration,
             timing=TimingRecord.model_validate(timing),
@@ -190,6 +208,7 @@ class TimingCache:
 
     def _write(self) -> None:
         """Atomically persist the current cache state."""
+        # Write through a sibling temporary file before replacement.
         self._path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._path.with_suffix(f"{self._path.suffix}.tmp")
         temporary.write_text(self._state.model_dump_json(indent=2) + "\n")

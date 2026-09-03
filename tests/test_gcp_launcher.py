@@ -57,7 +57,6 @@ class TestGcpLauncher:
         compiled_runner = compiled_path.read_text()
         profile_path = root / "scripts/run_cuda_profile_remote.sh"
         profile_runner = profile_path.read_text()
-        service = (root / "scripts/bfgs-benchmark.service").read_text()
         assert "bfgs-g4-ready" in startup
         assert "bfgs-g4-failed" in startup
         assert "cuda-toolkit-12-8" in startup
@@ -66,17 +65,18 @@ class TestGcpLauncher:
         assert "FAILED.json" in runner
         assert '"extended_rosenbrock|16"' in runner
         assert '"extended_rosenbrock|2"' not in runner
-        assert '"extended_powell|16"' not in runner
         assert "--objective" in runner
         assert "--dimension" in runner
-        assert "--state_file" in runner
+        assert "--state-file" in runner
         assert "timing-state.json" in runner
-        assert "WantedBy=multi-user.target" in service
         assert compiled_path.stat().st_mode & 0o111
         assert "COMPILED_DONE.json" in compiled_runner
         assert "COMPILED_RUNNING.json" in compiled_runner
         assert "report-with-compiled.json" in compiled_runner
-        assert "batched_bfgs.compiled_benchmark" in compiled_runner
+        assert "-m batched_bfgs benchmark" in compiled_runner
+        assert "--compiled" in compiled_runner
+        assert "-m batched_bfgs benchmark" in runner
+        assert "-m batched_bfgs profile-cuda" in profile_runner
         assert profile_path.stat().st_mode & 0o111
         assert "PROFILE_RUNNING.json" in profile_runner
         assert "PROFILE_DONE.json" in profile_runner

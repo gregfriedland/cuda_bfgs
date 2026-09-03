@@ -10,7 +10,6 @@ from batched_bfgs.chunked import (
 from batched_bfgs.loop import LoopBfgs
 from batched_bfgs.models import BfgsConfig, OptimizationResult
 from batched_bfgs.objective import (
-    ExtendedPowellSingularObjective,
     ExtendedRosenbrockObjective,
     TensorObjective,
 )
@@ -25,15 +24,6 @@ class TestObjectiveGradients:
         objective = ExtendedRosenbrockObjective(dimension=8)
         point = torch.tensor(
             (-1.2, 1.0, 0.4, -0.3, 1.1, 0.8, -0.8, 1.4),
-            dtype=torch.float64,
-        )
-        self._assert_gradient(objective, point)
-
-    def test_extended_powell_gradient(self) -> None:
-        """Extended Powell reports the derivative of every block."""
-        objective = ExtendedPowellSingularObjective(dimension=8)
-        point = torch.tensor(
-            (3.0, -1.0, 0.2, 1.0, 1.4, -0.3, 0.7, -0.5),
             dtype=torch.float64,
         )
         self._assert_gradient(objective, point)
@@ -89,33 +79,6 @@ class TestCpuEquivalence:
             torch.ones_like(starts),
             position_tolerance=1e-4,
             equivalence_tolerance=1e-4,
-        )
-
-    def test_loop_and_vectorized_extended_powell(self) -> None:
-        """Both implementations solve the singular strong-Wolfe stress case."""
-        device = torch.device("cpu")
-        objective = ExtendedPowellSingularObjective(dimension=16)
-        starts = objective.make_starts(4, device, torch.float64)
-        initial, _gradient = objective.value_and_gradient(starts)
-        config = BfgsConfig(tolerance=1e-6, max_iterations=300)
-        loop = LoopBfgs(config, objective).run(starts)
-        vectorized = VectorizedBfgs(config, objective).run(starts)
-        chunked = ChunkedVectorizedBfgs(config, objective).run(starts)
-        self._assert_equivalent(
-            loop,
-            vectorized,
-            initial,
-            torch.zeros_like(starts),
-            position_tolerance=1e-2,
-            equivalence_tolerance=2e-2,
-        )
-        self._assert_equivalent(
-            loop,
-            chunked,
-            initial,
-            torch.zeros_like(starts),
-            position_tolerance=1e-2,
-            equivalence_tolerance=2e-2,
         )
 
     def test_rejects_empty_dimension(self) -> None:

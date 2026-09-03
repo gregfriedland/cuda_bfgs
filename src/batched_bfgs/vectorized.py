@@ -26,8 +26,9 @@ class VectorizedBfgs(Bfgs):
             objective: Objective and analytic gradient evaluator.
 
         """
+        # Store immutable optimizer inputs for repeated runs.
         self._config = config
-        self._objective = objective or ExtendedRosenbrockObjective(dimension=2)
+        self._objective = objective or ExtendedRosenbrockObjective(dimension=16)
 
     @torch.no_grad()
     def run(self, starts: torch.Tensor) -> OptimizationResult:
@@ -40,32 +41,45 @@ class VectorizedBfgs(Bfgs):
             One optimization result per batch member.
 
         """
+        # Validate and copy the common batched input contract.
         if starts.ndim != 2 or starts.shape[0] == 0 or starts.shape[1] == 0:
             raise ValueError("starts must have shape [batch, dimension]")
         x = starts.clone()
+
+        # Initialize one inverse Hessian per batch member.
         batch, dimension = x.shape
         identity = torch.eye(dimension, dtype=x.dtype, device=x.device)
         hessian = identity.expand(batch, -1, -1).clone()
+
+        # Initialize objective values and per-member progress state.
         objective, gradient = self._objective.value_and_gradient(x)
         iterations = torch.zeros(batch, dtype=torch.int32, device=x.device)
         evaluations = torch.zeros_like(iterations)
         converged = self._norm(gradient) <= self._config.tolerance
         wolfe = torch.ones(batch, dtype=torch.bool, device=x.device)
         active = ~converged
+
+        # Advance active members through masked BFGS iterations.
         for _iteration in range(self._config.max_iterations):
             if not bool(active.any()):
                 break
+
+            # Compute descent directions and reset invalid inverse Hessians.
             direction = -torch.bmm(hessian, gradient.unsqueeze(-1)).squeeze(-1)
             derivative = (gradient * direction).sum(dim=-1)
             reset = active & (derivative >= 0.0)
             hessian = torch.where(reset[:, None, None], identity, hessian)
             direction = torch.where(reset[:, None], -gradient, direction)
+
+            # Find and record strong-Wolfe steps for all active members.
             line = self._strong_wolfe(x, objective, gradient, direction, active)
             evaluations += line.evaluations
             accepted = active & line.accepted
             wolfe &= ~active | line.accepted
             step = line.step[:, None] * direction
             change = line.gradient - gradient
+
+            # Update inverse Hessians from accepted displacement pairs.
             hessian = self._update_hessian(
                 hessian,
                 step,
@@ -73,10 +87,14 @@ class VectorizedBfgs(Bfgs):
                 accepted,
                 identity,
             )
+
+            # Commit accepted coordinates, objectives, and gradients.
             x = torch.where(accepted[:, None], x + step, x)
             objective = torch.where(accepted, line.objective, objective)
             gradient = torch.where(accepted[:, None], line.gradient, gradient)
             iterations += accepted.to(iterations.dtype)
+
+            # Retain only members that still require optimization.
             newly_converged = accepted & (
                 self._norm(gradient) <= self._config.tolerance
             )
@@ -85,6 +103,8 @@ class VectorizedBfgs(Bfgs):
                 self._norm(step) <= self._config.step_tolerance
             )
             active = accepted & ~converged & ~stagnant
+
+        # Return one tensor for every public result field.
         return OptimizationResult(
             x,
             objective,
@@ -104,12 +124,15 @@ class VectorizedBfgs(Bfgs):
         active: torch.Tensor,
     ) -> BatchedLineSearchResult:
         """Find strong-Wolfe steps for all active batch members."""
+        # Initialize the directional derivative and prior trial endpoint.
         batch = x.shape[0]
         derivative0 = (gradient * direction).sum(dim=-1)
         previous_step = torch.zeros_like(objective)
         previous_value = objective.clone()
         previous_gradient = gradient.clone()
         previous_derivative = derivative0.clone()
+
+        # Initialize accepted outputs and line-search accounting.
         step = torch.full_like(objective, self._config.initial_step)
         output_step = torch.zeros_like(objective)
         output_value = objective.clone()
@@ -117,6 +140,8 @@ class VectorizedBfgs(Bfgs):
         evaluations = torch.zeros(batch, dtype=torch.int32, device=x.device)
         accepted = torch.zeros(batch, dtype=torch.bool, device=x.device)
         bracketed = torch.zeros_like(accepted)
+
+        # Seed both endpoints of each possible search bracket.
         low = (
             previous_step,
             previous_value,
@@ -130,19 +155,26 @@ class VectorizedBfgs(Bfgs):
             previous_derivative.clone(),
         )
         pending = active.clone()
+
+        # Expand trial steps until each member accepts or brackets a solution.
         for iteration in range(self._config.max_bracket_iterations):
+            # Evaluate the current trial and its Armijo threshold.
             value, trial_gradient = self._evaluate(x, direction, step, pending)
             derivative = (trial_gradient * direction).sum(dim=-1)
             evaluations += pending.to(evaluations.dtype)
             armijo = objective + self._config.c1 * step * derivative0
             bad = pending & (~torch.isfinite(value) | (value > armijo))
             bad |= pending & (iteration > 0) & (value >= previous_value)
+
+            # Classify curvature acceptance and derivative reversal.
             curved = (
                 pending
                 & ~bad
                 & (derivative.abs() <= -self._config.c2 * derivative0)
             )
             reverse = pending & ~bad & ~curved & (derivative >= 0.0)
+
+            # Save accepted steps without disturbing pending members.
             accepted |= curved
             output_step = torch.where(curved, step, output_step)
             output_value = torch.where(curved, value, output_value)
@@ -151,6 +183,8 @@ class VectorizedBfgs(Bfgs):
                 trial_gradient,
                 output_gradient,
             )
+
+            # Construct bracket endpoints for failed or reversed trials.
             new_bracket = bad | reverse
             low = self._set_bracket_low(
                 low,
@@ -178,6 +212,8 @@ class VectorizedBfgs(Bfgs):
                 previous_gradient,
                 previous_derivative,
             )
+
+            # Carry forward unbracketed endpoints and double their steps.
             bracketed |= new_bracket
             continuing = pending & ~new_bracket & ~curved
             previous_step = torch.where(continuing, step, previous_step)
@@ -192,12 +228,15 @@ class VectorizedBfgs(Bfgs):
                 derivative,
                 previous_derivative,
             )
+
             step = torch.where(
                 continuing,
                 torch.clamp(2.0 * step, max=self._config.maximum_step),
                 step,
             )
             pending = continuing
+
+        # Refine all completed brackets with safeguarded interpolation.
         return self._zoom(
             x,
             direction,
@@ -229,9 +268,13 @@ class VectorizedBfgs(Bfgs):
         accepted: torch.Tensor,
     ) -> BatchedLineSearchResult:
         """Refine bracketed steps for active batch members."""
+        # Unpack the mutable low and high bracket endpoints.
         low_step, low_value, low_gradient, low_derivative = low
         high_step, high_value, high_gradient, high_derivative = high
+
+        # Repeatedly interpolate while each bracket remains active.
         for _iteration in range(self._config.max_zoom_iterations):
+            # Evaluate a safeguarded cubic step inside each bracket.
             step = self._cubic_step(
                 low_step,
                 low_value,
@@ -243,6 +286,8 @@ class VectorizedBfgs(Bfgs):
             value, gradient = self._evaluate(x, direction, step, active)
             derivative = (gradient * direction).sum(dim=-1)
             evaluations += active.to(evaluations.dtype)
+
+            # Classify Armijo failures and strong-curvature acceptance.
             armijo = objective0 + self._config.c1 * step * derivative0
             bad = active & (~torch.isfinite(value) | (value > armijo))
             bad |= active & (value >= low_value)
@@ -251,6 +296,8 @@ class VectorizedBfgs(Bfgs):
                 & ~bad
                 & (derivative.abs() <= -self._config.c2 * derivative0)
             )
+
+            # Save accepted trials in the public result tensors.
             accepted |= curved
             output_step = torch.where(curved, step, output_step)
             output_value = torch.where(curved, value, output_value)
@@ -259,6 +306,8 @@ class VectorizedBfgs(Bfgs):
                 gradient,
                 output_gradient,
             )
+
+            # Flip the high endpoint when the derivative changes orientation.
             good = active & ~bad & ~curved
             flip = good & (derivative * (high_step - low_step) >= 0.0)
             high_step = torch.where(flip, low_step, high_step)
@@ -269,15 +318,21 @@ class VectorizedBfgs(Bfgs):
                 high_gradient,
             )
             high_derivative = torch.where(flip, low_derivative, high_derivative)
+
+            # Move failed trials into the high bracket endpoint.
             high_step = torch.where(bad, step, high_step)
             high_value = torch.where(bad, value, high_value)
             high_gradient = torch.where(bad[:, None], gradient, high_gradient)
             high_derivative = torch.where(bad, derivative, high_derivative)
+
+            # Move usable trials into the low endpoint and retire successes.
             low_step = torch.where(good, step, low_step)
             low_value = torch.where(good, value, low_value)
             low_gradient = torch.where(good[:, None], gradient, low_gradient)
             low_derivative = torch.where(good, derivative, low_derivative)
             active &= ~curved
+
+        # Return accepted trials and accumulated evaluation counts.
         return BatchedLineSearchResult(
             output_step,
             output_value,
@@ -301,11 +356,14 @@ class VectorizedBfgs(Bfgs):
         second_derivative: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Update one endpoint of each active line-search bracket."""
+        # Apply the first masked endpoint update.
         step, value, gradient, derivative = current
         step = torch.where(first_mask, first_step, step)
         value = torch.where(first_mask, first_value, value)
         gradient = torch.where(first_mask[:, None], first_gradient, gradient)
         derivative = torch.where(first_mask, first_derivative, derivative)
+
+        # Apply the second masked endpoint update.
         step = torch.where(second_mask, second_step, step)
         value = torch.where(second_mask, second_value, value)
         gradient = torch.where(second_mask[:, None], second_gradient, gradient)
@@ -327,6 +385,7 @@ class VectorizedBfgs(Bfgs):
         second_derivative: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Update the other endpoint of each line-search bracket."""
+        # Reuse identical masked endpoint replacement logic.
         return VectorizedBfgs._set_bracket_low(
             current,
             first_mask,
@@ -351,6 +410,7 @@ class VectorizedBfgs(Bfgs):
         derivative2: torch.Tensor,
     ) -> torch.Tensor:
         """Choose safeguarded cubic-interpolation steps."""
+        # Define the interval and protect zero endpoint separation.
         lower = torch.minimum(step1, step2)
         upper = torch.maximum(step1, step2)
         midpoint = 0.5 * (lower + upper)
@@ -360,10 +420,14 @@ class VectorizedBfgs(Bfgs):
             separation,
             torch.ones_like(separation),
         )
+
+        # Compute the real-valued cubic discriminant.
         d1 = derivative1 + derivative2
         d1 -= 3.0 * (value1 - value2) / safe_separation
         discriminant = d1.square() - derivative1 * derivative2
         d2 = torch.sqrt(torch.clamp(discriminant, min=0.0))
+
+        # Select and protect the orientation-specific denominator.
         forward_denominator = derivative2 - derivative1 + 2.0 * d2
         reverse_denominator = derivative1 - derivative2 + 2.0 * d2
         denominator = torch.where(
@@ -376,6 +440,8 @@ class VectorizedBfgs(Bfgs):
             denominator,
             torch.ones_like(denominator),
         )
+
+        # Compute candidates for both bracket orientations.
         forward = step2 - (step2 - step1) * (
             (derivative2 + d2 - d1) / safe_denominator
         )
@@ -383,6 +449,8 @@ class VectorizedBfgs(Bfgs):
             (derivative1 + d2 - d1) / safe_denominator
         )
         candidate = torch.where(step1 <= step2, forward, reverse)
+
+        # Reject unstable or poorly separated cubic candidates.
         guard = 0.1 * (upper - lower)
         usable = torch.isfinite(candidate) & (discriminant >= 0.0)
         usable &= denominator.abs() > 1e-20
@@ -398,6 +466,7 @@ class VectorizedBfgs(Bfgs):
         active: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Evaluate active points along their search directions."""
+        # Keep inactive members at their current coordinates.
         safe_step = torch.where(active, step, torch.zeros_like(step))
         return self._objective.value_and_gradient(
             x + safe_step[:, None] * direction,
@@ -412,22 +481,29 @@ class VectorizedBfgs(Bfgs):
         identity: torch.Tensor,
     ) -> torch.Tensor:
         """Apply batched inverse-Hessian BFGS updates."""
+        # Accept only finite curvature that clears the scaled threshold.
         curvature = (step * change).sum(dim=-1)
         threshold = self._config.curvature_eps
         threshold *= torch.linalg.vector_norm(step, dim=-1)
         threshold *= torch.linalg.vector_norm(change, dim=-1)
         usable = accepted & torch.isfinite(curvature) & (curvature > threshold)
+
+        # Protect reciprocal curvature for masked-out members.
         safe_curvature = torch.where(
             usable,
             curvature,
             torch.ones_like(curvature),
         )
         rho = safe_curvature.reciprocal()
+
+        # Apply the factored inverse-Hessian BFGS update.
         left = identity - rho[:, None, None] * (
             step[:, :, None] * change[:, None, :]
         )
         updated = torch.bmm(torch.bmm(left, hessian), left.transpose(1, 2))
         updated += rho[:, None, None] * (step[:, :, None] * step[:, None, :])
+
+        # Preserve previous Hessians where curvature was unusable.
         return torch.where(usable[:, None, None], updated, hessian)
 
     @staticmethod
