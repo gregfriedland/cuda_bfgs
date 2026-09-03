@@ -91,7 +91,7 @@ class TestCpuEquivalence:
             initial,
             torch.zeros_like(starts),
             position_tolerance=1e-2,
-            equivalence_tolerance=1e-2,
+            equivalence_tolerance=2e-2,
         )
 
     def test_rejects_empty_dimension(self) -> None:

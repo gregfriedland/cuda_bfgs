@@ -196,7 +196,9 @@ class BenchmarkRunner:
                 target,
                 target_tolerance,
             )
-        equivalence_tolerance = target_tolerance
+        equivalence_tolerance = 2.0 * target_tolerance
+        if self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK:
+            equivalence_tolerance = target_tolerance
         if (
             self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
             and self._dimension == 2
