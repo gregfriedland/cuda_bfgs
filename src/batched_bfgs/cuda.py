@@ -7,16 +7,18 @@ from types import ModuleType
 import torch
 from torch.utils.cpp_extension import load
 
+from batched_bfgs.base import Bfgs
 from batched_bfgs.models import BfgsConfig, OptimizationResult
+from batched_bfgs.objective import ObjectiveType
 
 
-class CudaBfgs:
+class CudaBfgs(Bfgs):
     """Run one fused fixed-dimensional optimization per CUDA thread."""
 
     def __init__(
         self,
         config: BfgsConfig,
-        objective: str = "extended_rosenbrock",
+        objective: ObjectiveType = ObjectiveType.EXTENDED_ROSENBROCK,
     ) -> None:
         """Initialize the optimizer without compiling the extension.
 
@@ -27,9 +29,11 @@ class CudaBfgs:
         """
         self._config = config
         objective_codes = {
-            "extended_rosenbrock": 0,
-            "extended_powell": 1,
+            ObjectiveType.EXTENDED_ROSENBROCK: 0,
+            ObjectiveType.EXTENDED_POWELL: 1,
         }
+        if not isinstance(objective, ObjectiveType):
+            raise TypeError("objective must be an ObjectiveType")
         if objective not in objective_codes:
             raise ValueError(f"unsupported CUDA objective: {objective}")
         self._objective_code = objective_codes[objective]

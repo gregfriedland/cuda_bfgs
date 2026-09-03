@@ -2,6 +2,7 @@
 
 import torch
 
+from batched_bfgs.base import Bfgs
 from batched_bfgs.models import (
     BatchedLineSearchResult,
     BfgsConfig,
@@ -10,7 +11,7 @@ from batched_bfgs.models import (
 from batched_bfgs.objective import ExtendedRosenbrockObjective, TensorObjective
 
 
-class VectorizedBfgs:
+class VectorizedBfgs(Bfgs):
     """Optimize a batch through masked tensor operations."""
 
     def __init__(
@@ -26,7 +27,7 @@ class VectorizedBfgs:
 
         """
         self._config = config
-        self._objective = objective or ExtendedRosenbrockObjective()
+        self._objective = objective or ExtendedRosenbrockObjective(dimension=2)
 
     @torch.no_grad()
     def run(self, starts: torch.Tensor) -> OptimizationResult:
@@ -102,6 +103,7 @@ class VectorizedBfgs:
         direction: torch.Tensor,
         active: torch.Tensor,
     ) -> BatchedLineSearchResult:
+        """Find strong-Wolfe steps for all active batch members."""
         batch = x.shape[0]
         derivative0 = (gradient * direction).sum(dim=-1)
         previous_step = torch.zeros_like(objective)
@@ -226,6 +228,7 @@ class VectorizedBfgs:
         evaluations: torch.Tensor,
         accepted: torch.Tensor,
     ) -> BatchedLineSearchResult:
+        """Refine bracketed steps for active batch members."""
         low_step, low_value, low_gradient, low_derivative = low
         high_step, high_value, high_gradient, high_derivative = high
         for _iteration in range(self._config.max_zoom_iterations):
@@ -297,6 +300,7 @@ class VectorizedBfgs:
         second_gradient: torch.Tensor,
         second_derivative: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Update one endpoint of each active line-search bracket."""
         step, value, gradient, derivative = current
         step = torch.where(first_mask, first_step, step)
         value = torch.where(first_mask, first_value, value)
@@ -322,6 +326,7 @@ class VectorizedBfgs:
         second_gradient: torch.Tensor,
         second_derivative: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Update the other endpoint of each line-search bracket."""
         return VectorizedBfgs._set_bracket_low(
             current,
             first_mask,
@@ -345,6 +350,7 @@ class VectorizedBfgs:
         value2: torch.Tensor,
         derivative2: torch.Tensor,
     ) -> torch.Tensor:
+        """Choose safeguarded cubic-interpolation steps."""
         lower = torch.minimum(step1, step2)
         upper = torch.maximum(step1, step2)
         midpoint = 0.5 * (lower + upper)
@@ -391,6 +397,7 @@ class VectorizedBfgs:
         step: torch.Tensor,
         active: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Evaluate active points along their search directions."""
         safe_step = torch.where(active, step, torch.zeros_like(step))
         return self._objective.value_and_gradient(
             x + safe_step[:, None] * direction,
@@ -404,6 +411,7 @@ class VectorizedBfgs:
         accepted: torch.Tensor,
         identity: torch.Tensor,
     ) -> torch.Tensor:
+        """Apply batched inverse-Hessian BFGS updates."""
         curvature = (step * change).sum(dim=-1)
         threshold = self._config.curvature_eps
         threshold *= torch.linalg.vector_norm(step, dim=-1)
@@ -424,4 +432,5 @@ class VectorizedBfgs:
 
     @staticmethod
     def _norm(value: torch.Tensor) -> torch.Tensor:
+        """Return per-member infinity norms."""
         return value.abs().amax(dim=-1)

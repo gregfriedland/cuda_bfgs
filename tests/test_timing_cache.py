@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from batched_bfgs.objective import ObjectiveType
 from batched_bfgs.timing_cache import TimingCache, TimingConfiguration
 
 
@@ -57,8 +58,9 @@ class TestTimingCache:
         implementation: str,
         batch_size: int,
     ) -> TimingConfiguration:
+        """Create one reusable timing configuration."""
         return TimingConfiguration(
-            objective="extended_rosenbrock",
+            objective=ObjectiveType.EXTENDED_ROSENBROCK,
             dimension=16,
             implementation=implementation,
             batch_size=batch_size,

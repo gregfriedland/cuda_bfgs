@@ -6,9 +6,9 @@ from typing import Any
 
 import torch
 
-from batched_bfgs.benchmark import ObjectiveFactory, ObjectiveName
 from batched_bfgs.cuda import CudaBfgs
 from batched_bfgs.models import BfgsConfig
+from batched_bfgs.objective import ObjectiveType
 
 
 class CudaProfileWorkload:
@@ -16,7 +16,7 @@ class CudaProfileWorkload:
 
     def __init__(
         self,
-        objective_name: ObjectiveName,
+        objective_name: ObjectiveType,
         dimension: int,
         batch_size: int,
     ) -> None:
@@ -27,20 +27,19 @@ class CudaProfileWorkload:
         self._dimension = dimension
         self._batch_size = batch_size
         self._config = BfgsConfig(tolerance=1e-4, max_iterations=300)
+        self._objective = objective_name.create(dimension)
 
     def run(self) -> dict[str, Any]:
         """Compile, warm up, and measure one fused CUDA optimizer launch."""
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA profiling requires an available GPU")
         device = torch.device("cuda")
-        starts = ObjectiveFactory.make_starts(
-            self._objective_name,
+        starts = self._objective.make_starts(
             self._batch_size,
-            self._dimension,
             device,
             torch.float32,
         )
-        optimizer = CudaBfgs(self._config, self._objective_name.value)
+        optimizer = CudaBfgs(self._config, self._objective_name)
         optimizer.compile(verbose=True)
         optimizer.run(starts)
         torch.cuda.synchronize(device)
@@ -91,8 +90,8 @@ class CudaProfileCli:
         parser = argparse.ArgumentParser()
         parser.add_argument(
             "--objective",
-            type=ObjectiveName,
-            choices=list(ObjectiveName),
+            type=ObjectiveType,
+            choices=list(ObjectiveType),
             required=True,
         )
         parser.add_argument("--dimension", type=int, required=True)

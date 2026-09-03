@@ -22,7 +22,7 @@ class TestObjectiveGradients:
 
     def test_extended_rosenbrock_gradient(self) -> None:
         """Extended Rosenbrock reports the derivative of every block."""
-        objective = ExtendedRosenbrockObjective()
+        objective = ExtendedRosenbrockObjective(dimension=8)
         point = torch.tensor(
             (-1.2, 1.0, 0.4, -0.3, 1.1, 0.8, -0.8, 1.4),
             dtype=torch.float64,
@@ -31,7 +31,7 @@ class TestObjectiveGradients:
 
     def test_extended_powell_gradient(self) -> None:
         """Extended Powell reports the derivative of every block."""
-        objective = ExtendedPowellSingularObjective()
+        objective = ExtendedPowellSingularObjective(dimension=8)
         point = torch.tensor(
             (3.0, -1.0, 0.2, 1.0, 1.4, -0.3, 0.7, -0.5),
             dtype=torch.float64,
@@ -43,6 +43,7 @@ class TestObjectiveGradients:
         objective: TensorObjective,
         point: torch.Tensor,
     ) -> None:
+        """Compare an analytic gradient with central differences."""
         _value, gradient = objective.value_and_gradient(point)
         finite_difference = torch.empty_like(point)
         epsilon = 1e-6
@@ -66,8 +67,8 @@ class TestCpuEquivalence:
     def test_loop_and_vectorized_extended_rosenbrock(self) -> None:
         """Both implementations converge in sixteen dimensions."""
         device = torch.device("cpu")
-        objective = ExtendedRosenbrockObjective()
-        starts = objective.make_starts(16, 16, device, torch.float64)
+        objective = ExtendedRosenbrockObjective(dimension=16)
+        starts = objective.make_starts(16, device, torch.float64)
         initial, _gradient = objective.value_and_gradient(starts)
         config = BfgsConfig(tolerance=1e-7, max_iterations=200)
         loop = LoopBfgs(config, objective).run(starts)
@@ -93,8 +94,8 @@ class TestCpuEquivalence:
     def test_loop_and_vectorized_extended_powell(self) -> None:
         """Both implementations solve the singular strong-Wolfe stress case."""
         device = torch.device("cpu")
-        objective = ExtendedPowellSingularObjective()
-        starts = objective.make_starts(4, 16, device, torch.float64)
+        objective = ExtendedPowellSingularObjective(dimension=16)
+        starts = objective.make_starts(4, device, torch.float64)
         initial, _gradient = objective.value_and_gradient(starts)
         config = BfgsConfig(tolerance=1e-6, max_iterations=300)
         loop = LoopBfgs(config, objective).run(starts)
@@ -148,10 +149,9 @@ class TestCpuEquivalence:
             return function
 
         monkeypatch.setattr(torch, "compile", fake_compile)
-        objective = ExtendedRosenbrockObjective()
+        objective = ExtendedRosenbrockObjective(dimension=2)
         starts = objective.make_starts(
             4,
-            2,
             torch.device("cpu"),
             torch.float64,
         )
@@ -175,6 +175,7 @@ class TestCpuEquivalence:
         position_tolerance: float = 1e-6,
         equivalence_tolerance: float = 1e-6,
     ) -> None:
+        """Assert convergence and numerical equivalence."""
         assert bool(loop.converged.all())
         assert bool(vectorized.converged.all())
         assert bool(loop.wolfe_satisfied.all())

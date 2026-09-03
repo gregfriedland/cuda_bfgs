@@ -28,6 +28,7 @@ class BfgsConfig(BaseModelNoExtra):
 
     @model_validator(mode="after")
     def _validate_values(self) -> Self:
+        """Validate the numerical configuration."""
         if not 0.0 < self.c1 < self.c2 < 1.0:
             raise ValueError("Require 0 < c1 < c2 < 1")
         if self.initial_step <= 0.0:

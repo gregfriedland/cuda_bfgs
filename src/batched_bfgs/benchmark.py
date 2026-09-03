@@ -5,7 +5,7 @@ import json
 import statistics
 import time
 from collections.abc import Callable
-from enum import Enum, StrEnum
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +15,7 @@ from batched_bfgs.chunked import ChunkedVectorizedBfgs
 from batched_bfgs.cuda import CudaBfgs
 from batched_bfgs.loop import LoopBfgs
 from batched_bfgs.models import BfgsConfig, OptimizationResult
-from batched_bfgs.objective import (
-    ExtendedPowellSingularObjective,
-    ExtendedRosenbrockObjective,
-    TensorObjective,
-)
+from batched_bfgs.objective import ObjectiveType
 from batched_bfgs.timing_cache import TimingCache, TimingConfiguration
 from batched_bfgs.vectorized import VectorizedBfgs
 
@@ -33,54 +29,6 @@ class Implementation(Enum):
     CUDA_KERNEL = "cuda_kernel"
 
 
-class ObjectiveName(StrEnum):
-    """Available analytic benchmark objectives."""
-
-    EXTENDED_ROSENBROCK = "extended_rosenbrock"
-    EXTENDED_POWELL = "extended_powell"
-
-
-class ObjectiveFactory:
-    """Construct objectives, starts, and known minimizers by name."""
-
-    @staticmethod
-    def create(name: ObjectiveName) -> TensorObjective:
-        """Create the requested analytic objective."""
-        if name is ObjectiveName.EXTENDED_ROSENBROCK:
-            return ExtendedRosenbrockObjective()
-        return ExtendedPowellSingularObjective()
-
-    @staticmethod
-    def make_starts(
-        name: ObjectiveName,
-        batch_size: int,
-        dimension: int,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        """Create deterministic standard starts for an objective."""
-        if name is ObjectiveName.EXTENDED_ROSENBROCK:
-            return ExtendedRosenbrockObjective.make_starts(
-                batch_size,
-                dimension,
-                device,
-                dtype,
-            )
-        return ExtendedPowellSingularObjective.make_starts(
-            batch_size,
-            dimension,
-            device,
-            dtype,
-        )
-
-    @staticmethod
-    def minimizer(name: ObjectiveName, starts: torch.Tensor) -> torch.Tensor:
-        """Return the known global minimizer for an objective."""
-        if name is ObjectiveName.EXTENDED_ROSENBROCK:
-            return torch.ones_like(starts)
-        return torch.zeros_like(starts)
-
-
 class BenchmarkRunner:
     """Validate and time implementations on one analytic objective."""
 
@@ -88,7 +36,7 @@ class BenchmarkRunner:
         self,
         batch_sizes: list[int],
         repeats: int,
-        objective_name: ObjectiveName = ObjectiveName.EXTENDED_ROSENBROCK,
+        objective_name: ObjectiveType = ObjectiveType.EXTENDED_ROSENBROCK,
         dimension: int = 16,
         loop_max_batch: int = 256,
     ) -> None:
@@ -107,11 +55,9 @@ class BenchmarkRunner:
             tolerance=1e-4,
             max_iterations=300,
         )
-        self._objective = ObjectiveFactory.create(objective_name)
-        ObjectiveFactory.make_starts(
-            objective_name,
+        self._objective = objective_name.create(dimension)
+        self._objective.make_starts(
             1,
-            dimension,
             torch.device("cpu"),
             torch.float64,
         )
@@ -190,7 +136,7 @@ class BenchmarkRunner:
             for implementation_name in Implementation:
                 name = implementation_name.value
                 configuration = TimingConfiguration(
-                    objective=self._objective_name.value,
+                    objective=self._objective_name,
                     dimension=self._dimension,
                     implementation=name,
                     batch_size=batch_size,
@@ -211,10 +157,8 @@ class BenchmarkRunner:
         dtype: torch.dtype,
     ) -> torch.Tensor:
         """Create starts for this runner's objective and dimension."""
-        return ObjectiveFactory.make_starts(
-            self._objective_name,
+        return self._objective.make_starts(
             batch_size,
-            self._dimension,
             device,
             dtype,
         )
@@ -224,16 +168,17 @@ class BenchmarkRunner:
         device: torch.device,
         config: BfgsConfig,
     ) -> CudaBfgs | None:
+        """Create a compatible CUDA implementation when available."""
         compatible = device.type == "cuda" and (
             self._dimension == 16
             or (
-                self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
+                self._objective_name is ObjectiveType.EXTENDED_ROSENBROCK
                 and self._dimension == 2
             )
         )
         if not compatible:
             return None
-        cuda = CudaBfgs(config, self._objective_name.value)
+        cuda = CudaBfgs(config, self._objective_name)
         cuda.compile(verbose=False)
         return cuda
 
@@ -242,6 +187,7 @@ class BenchmarkRunner:
         device: torch.device,
         cuda: CudaBfgs | None,
     ) -> dict[str, Any]:
+        """Validate all compatible implementations against known solutions."""
         starts = self.make_starts(16, device, torch.float64)
         initial, _gradient = self._objective.value_and_gradient(starts)
         loop = LoopBfgs(self._correctness_config, self._objective).run(starts)
@@ -260,10 +206,10 @@ class BenchmarkRunner:
         ]
         if cuda is not None:
             results.append((Implementation.CUDA_KERNEL.value, cuda.run(starts)))
-        target = ObjectiveFactory.minimizer(self._objective_name, starts)
+        target = self._objective.minimizer(starts)
         target_tolerance = (
             1e-4
-            if self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
+            if self._objective_name is ObjectiveType.EXTENDED_ROSENBROCK
             else 1e-2
         )
         for name, result in results:
@@ -275,10 +221,10 @@ class BenchmarkRunner:
                 target_tolerance,
             )
         equivalence_tolerance = 2.0 * target_tolerance
-        if self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK:
+        if self._objective_name is ObjectiveType.EXTENDED_ROSENBROCK:
             equivalence_tolerance = target_tolerance
         if (
-            self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
+            self._objective_name is ObjectiveType.EXTENDED_ROSENBROCK
             and self._dimension == 2
         ):
             equivalence_tolerance = 1e-6
@@ -324,6 +270,7 @@ class BenchmarkRunner:
         cuda: CudaBfgs | None,
         batch_size: int,
     ) -> dict[str, Callable[[torch.Tensor], OptimizationResult]]:
+        """Create implementations desired for one batch size."""
         implementations = {
             Implementation.PYTORCH_NAIVE.value: VectorizedBfgs(
                 self._timing_config,
@@ -349,6 +296,7 @@ class BenchmarkRunner:
         implementation: Callable[[torch.Tensor], OptimizationResult],
         starts: torch.Tensor,
     ) -> dict[str, Any]:
+        """Measure one warmed implementation and summarize its result."""
         implementation(starts)
         elapsed_ms: list[float] = []
         result: OptimizationResult | None = None
@@ -389,6 +337,7 @@ class BenchmarkRunner:
         target: torch.Tensor,
         target_tolerance: float,
     ) -> None:
+        """Assert numerical correctness for one optimization result."""
         if not bool(torch.isfinite(result.x).all()):
             raise AssertionError(f"{name} produced non-finite coordinates")
         if not bool(torch.isfinite(result.objective).all()):
@@ -411,6 +360,7 @@ class BenchmarkRunner:
 
     @staticmethod
     def _device_name(device: torch.device) -> str:
+        """Return a stable display name for a compute device."""
         if device.type == "cuda":
             return torch.cuda.get_device_properties(device).name
         return str(device)
@@ -432,9 +382,9 @@ class BenchmarkCli:
         parser.add_argument("--repeats", type=int, default=5)
         parser.add_argument(
             "--objective",
-            type=ObjectiveName,
-            choices=list(ObjectiveName),
-            default=ObjectiveName.EXTENDED_ROSENBROCK,
+            type=ObjectiveType,
+            choices=list(ObjectiveType),
+            default=ObjectiveType.EXTENDED_ROSENBROCK,
         )
         parser.add_argument("--dimension", type=int, default=16)
         parser.add_argument("--device", default="cuda")

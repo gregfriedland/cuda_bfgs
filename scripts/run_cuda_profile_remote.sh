@@ -32,9 +32,7 @@ trap record_failure ERR
 
 command -v nsys >/dev/null
 profile_cases=(
-    "extended_rosenbrock|2"
     "extended_rosenbrock|16"
-    "extended_powell|16"
 )
 for profile_case in "${profile_cases[@]}"; do
     IFS='|' read -r objective dimension <<<"$profile_case"

@@ -7,12 +7,13 @@ from typing import Any, Literal, Self
 from pydantic import Field, model_validator
 
 from batched_bfgs.models import BaseModelNoExtra
+from batched_bfgs.objective import ObjectiveType
 
 
 class TimingConfiguration(BaseModelNoExtra):
     """Fields that determine whether a timing result can be reused."""
 
-    objective: str
+    objective: ObjectiveType
     dimension: int
     implementation: str
     batch_size: int
@@ -65,6 +66,7 @@ class TimingRecord(BaseModelNoExtra):
 
     @model_validator(mode="after")
     def _validate_metrics(self) -> Self:
+        """Validate all recorded timing metrics."""
         values = (
             self.median_ms,
             self.members_per_second,
@@ -104,6 +106,7 @@ class TimingCacheState(BaseModelNoExtra):
 
     @model_validator(mode="after")
     def _validate_keys(self) -> Self:
+        """Validate configuration keys and timing identities."""
         for key, entry in self.configurations.items():
             if key != entry.configuration.key:
                 raise ValueError(
@@ -186,6 +189,7 @@ class TimingCache:
         self._write()
 
     def _write(self) -> None:
+        """Atomically persist the current cache state."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self._path.with_suffix(f"{self._path.suffix}.tmp")
         temporary.write_text(self._state.model_dump_json(indent=2) + "\n")

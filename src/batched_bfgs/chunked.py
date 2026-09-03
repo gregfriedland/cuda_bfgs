@@ -91,6 +91,7 @@ class ChunkedVectorizedBfgs(VectorizedBfgs):
         state: _ChunkState,
         identity: torch.Tensor,
     ) -> _ChunkState:
+        """Run chunks with synchronous CPU convergence checks."""
         completed = 0
         while completed < self._config.max_iterations:
             count = min(
@@ -108,6 +109,7 @@ class ChunkedVectorizedBfgs(VectorizedBfgs):
         state: _ChunkState,
         identity: torch.Tensor,
     ) -> _ChunkState:
+        """Run chunks with asynchronous CUDA convergence checks."""
         check_stream = torch.cuda.Stream(device=state.x.device)
         pending: deque[_PendingCheck] = deque()
         completed = 0
@@ -128,6 +130,7 @@ class ChunkedVectorizedBfgs(VectorizedBfgs):
         active: torch.Tensor,
         check_stream: torch.cuda.Stream,
     ) -> _PendingCheck:
+        """Schedule a nonblocking device-to-host activity check."""
         device_active = active.any()
         reduction_done = torch.cuda.Event()
         reduction_done.record(torch.cuda.current_stream(active.device))
@@ -142,6 +145,7 @@ class ChunkedVectorizedBfgs(VectorizedBfgs):
 
     @staticmethod
     def _poll_converged(pending: deque[_PendingCheck]) -> bool:
+        """Poll completed activity checks without blocking the host."""
         while pending and pending[0].ready.query():
             check = pending.popleft()
             if not bool(check.host_active):
@@ -154,6 +158,7 @@ class ChunkedVectorizedBfgs(VectorizedBfgs):
         identity: torch.Tensor,
         count: int,
     ) -> _ChunkState:
+        """Run a fixed number of eager BFGS iterations."""
         for _iteration in range(count):
             state = self._run_iteration(state, identity)
         return state
@@ -246,6 +251,7 @@ class CompiledChunkedVectorizedBfgs(ChunkedVectorizedBfgs):
         identity: torch.Tensor,
         count: int,
     ) -> _ChunkState:
+        """Run a fixed number of compiled BFGS iterations."""
         for _iteration in range(count):
             state = self._compiled_iteration(state, identity)
         return state

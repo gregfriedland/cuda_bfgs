@@ -4,6 +4,7 @@ import math
 
 import torch
 
+from batched_bfgs.base import Bfgs
 from batched_bfgs.models import (
     BfgsConfig,
     OptimizationResult,
@@ -12,7 +13,7 @@ from batched_bfgs.models import (
 from batched_bfgs.objective import ExtendedRosenbrockObjective, TensorObjective
 
 
-class LoopBfgs:
+class LoopBfgs(Bfgs):
     """Optimize each batch member through explicit Python control flow."""
 
     def __init__(
@@ -28,7 +29,7 @@ class LoopBfgs:
 
         """
         self._config = config
-        self._objective = objective or ExtendedRosenbrockObjective()
+        self._objective = objective or ExtendedRosenbrockObjective(dimension=2)
 
     @torch.no_grad()
     def run(self, starts: torch.Tensor) -> OptimizationResult:
@@ -49,6 +50,7 @@ class LoopBfgs:
         return OptimizationResult(*stacked)
 
     def _optimize_one(self, start: torch.Tensor) -> OptimizationResult:
+        """Optimize one starting point."""
         x = start.clone()
         dimension = x.shape[0]
         hessian = torch.eye(dimension, dtype=x.dtype, device=x.device)
@@ -98,6 +100,7 @@ class LoopBfgs:
         gradient: torch.Tensor,
         direction: torch.Tensor,
     ) -> ScalarLineSearchResult:
+        """Find a step satisfying the strong-Wolfe conditions."""
         derivative0 = float(torch.dot(gradient, direction))
         previous_step = 0.0
         previous_value = objective
@@ -171,6 +174,7 @@ class LoopBfgs:
         high: tuple[float, torch.Tensor, torch.Tensor, float],
         evaluations: int,
     ) -> ScalarLineSearchResult:
+        """Refine a bracketed strong-Wolfe step."""
         low_step, low_value, low_gradient, low_derivative = low
         high_step, high_value, _high_gradient, high_derivative = high
         for iteration in range(self._config.max_zoom_iterations):
@@ -222,6 +226,7 @@ class LoopBfgs:
         value2: float,
         derivative2: float,
     ) -> float:
+        """Choose a safeguarded cubic-interpolation step."""
         lower, upper = sorted((step1, step2))
         midpoint = 0.5 * (lower + upper)
         if step1 == step2:
@@ -260,6 +265,7 @@ class LoopBfgs:
         direction: torch.Tensor,
         step: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Evaluate the objective along one search direction."""
         return self._objective.value_and_gradient(x + step * direction)
 
     def _update_hessian(
@@ -268,6 +274,7 @@ class LoopBfgs:
         step: torch.Tensor,
         change: torch.Tensor,
     ) -> torch.Tensor:
+        """Apply one inverse-Hessian BFGS update."""
         curvature = torch.dot(step, change)
         threshold = self._config.curvature_eps * torch.linalg.vector_norm(step)
         threshold *= torch.linalg.vector_norm(change)
@@ -284,6 +291,7 @@ class LoopBfgs:
 
     @staticmethod
     def _gradient_norm(value: torch.Tensor) -> float:
+        """Return the gradient infinity norm."""
         return float(value.abs().amax())
 
     @staticmethod
@@ -296,6 +304,7 @@ class LoopBfgs:
         converged: bool,
         wolfe_satisfied: bool,
     ) -> OptimizationResult:
+        """Pack scalar optimizer state into tensor outputs."""
         device = x.device
         return OptimizationResult(
             x,

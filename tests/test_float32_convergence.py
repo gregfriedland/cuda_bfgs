@@ -14,8 +14,8 @@ class TestFloat32Convergence:
     def test_extended_rosenbrock(self) -> None:
         """Both CPU implementations converge with tolerance 1e-4."""
         device = torch.device("cpu")
-        objective = ExtendedRosenbrockObjective()
-        starts = objective.make_starts(64, 16, device, torch.float32)
+        objective = ExtendedRosenbrockObjective(dimension=16)
+        starts = objective.make_starts(64, device, torch.float32)
         config = BfgsConfig(tolerance=1e-4, max_iterations=300)
         loop = LoopBfgs(config, objective).run(starts)
         vectorized = VectorizedBfgs(config, objective).run(starts)

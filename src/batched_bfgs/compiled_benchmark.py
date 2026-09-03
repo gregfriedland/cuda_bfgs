@@ -10,16 +10,13 @@ from typing import Any
 import torch
 from torch._dynamo.utils import counters
 
-from batched_bfgs.benchmark import (
-    BenchmarkRunner,
-    ObjectiveFactory,
-    ObjectiveName,
-)
+from batched_bfgs.benchmark import BenchmarkRunner
 from batched_bfgs.chunked import (
     ChunkedVectorizedBfgs,
     CompiledChunkedVectorizedBfgs,
 )
 from batched_bfgs.models import BfgsConfig, OptimizationResult
+from batched_bfgs.objective import ObjectiveType
 from batched_bfgs.timing_cache import TimingCache, TimingConfiguration
 
 
@@ -33,7 +30,7 @@ class CompiledBenchmarkRunner:
         self,
         batch_sizes: list[int],
         repeats: int,
-        objective_name: ObjectiveName,
+        objective_name: ObjectiveType,
         dimension: int,
         chunk_size: int = 16,
     ) -> None:
@@ -48,7 +45,7 @@ class CompiledBenchmarkRunner:
         self._dimension = dimension
         self._chunk_size = chunk_size
         self._config = BfgsConfig(tolerance=1e-4, max_iterations=300)
-        self._objective = ObjectiveFactory.create(objective_name)
+        self._objective = objective_name.create(dimension)
 
     def run(self, device: torch.device, state_path: Path) -> dict[str, Any]:
         """Run GPU parity checks and steady-state timings."""
@@ -93,8 +90,9 @@ class CompiledBenchmarkRunner:
         device: torch.device,
         batch_size: int,
     ) -> TimingConfiguration:
+        """Build the cache identity for one compiled timing."""
         return TimingConfiguration(
-            objective=self._objective_name.value,
+            objective=self._objective_name,
             dimension=self._dimension,
             implementation=self.implementation,
             batch_size=batch_size,
@@ -108,10 +106,9 @@ class CompiledBenchmarkRunner:
         )
 
     def _check_correctness(self, device: torch.device) -> dict[str, Any]:
-        starts = ObjectiveFactory.make_starts(
-            self._objective_name,
+        """Validate compiled results against the eager chunked optimizer."""
+        starts = self._objective.make_starts(
             16,
-            self._dimension,
             device,
             torch.float32,
         )
@@ -149,14 +146,14 @@ class CompiledBenchmarkRunner:
             compiled.wolfe_satisfied,
             eager.wolfe_satisfied,
         )
-        target = ObjectiveFactory.minimizer(self._objective_name, starts)
+        target = self._objective.minimizer(starts)
         BenchmarkRunner._assert_result(
             self.implementation,
             compiled,
             self._objective.value_and_gradient(starts)[0],
             target,
             parity_tolerance
-            if self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
+            if self._objective_name is ObjectiveType.EXTENDED_ROSENBROCK
             else 1e-2,
         )
         return {
@@ -180,13 +177,12 @@ class CompiledBenchmarkRunner:
         device: torch.device,
         batch_size: int,
     ) -> dict[str, Any]:
+        """Measure compilation overhead and steady-state GPU timing."""
         torch.compiler.reset()
         counters.clear()
         torch.cuda.reset_peak_memory_stats(device)
-        starts = ObjectiveFactory.make_starts(
-            self._objective_name,
+        starts = self._objective.make_starts(
             batch_size,
-            self._dimension,
             device,
             torch.float32,
         )
@@ -247,10 +243,12 @@ class CompiledBenchmarkRunner:
 
     @staticmethod
     def _counter(group: str, name: str) -> int:
+        """Read one TorchDynamo counter."""
         return int(counters[group][name])
 
     @staticmethod
     def _graph_breaks() -> int:
+        """Return the total recorded TorchDynamo graph breaks."""
         return sum(int(value) for value in counters["graph_break"].values())
 
 
@@ -265,8 +263,8 @@ class CompiledBenchmarkCli:
         parser.add_argument("--repeats", type=int, default=5)
         parser.add_argument(
             "--objective",
-            type=ObjectiveName,
-            choices=list(ObjectiveName),
+            type=ObjectiveType,
+            choices=list(ObjectiveType),
             required=True,
         )
         parser.add_argument("--dimension", type=int, required=True)

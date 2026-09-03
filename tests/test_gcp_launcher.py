@@ -64,9 +64,9 @@ class TestGcpLauncher:
         assert "RUNNING.json" in runner
         assert "DONE.json" in runner
         assert "FAILED.json" in runner
-        assert '"extended_rosenbrock|2"' in runner
         assert '"extended_rosenbrock|16"' in runner
-        assert '"extended_powell|16"' in runner
+        assert '"extended_rosenbrock|2"' not in runner
+        assert '"extended_powell|16"' not in runner
         assert "--objective" in runner
         assert "--dimension" in runner
         assert "--state_file" in runner

@@ -43,9 +43,7 @@ mv "$running_tmp" "$state_dir/RUNNING.json"
 report_tmp="$state_dir/.report.json.tmp"
 timing_state="$state_dir/timing-state.json"
 benchmark_cases=(
-    "extended_rosenbrock|2"
     "extended_rosenbrock|16"
-    "extended_powell|16"
 )
 printf '{\n  "benchmarks": [\n' >"$report_tmp"
 separator=""

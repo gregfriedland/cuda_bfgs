@@ -37,9 +37,7 @@ record_failure() {
 trap record_failure ERR
 
 benchmark_cases=(
-    "extended_rosenbrock|2"
     "extended_rosenbrock|16"
-    "extended_powell|16"
 )
 printf '{\n  "benchmarks": [\n' >"$state_dir/.compiled-report.json.tmp"
 separator=""
