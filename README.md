@@ -2,6 +2,8 @@
 
 ![Rosenbrock 16D benchmark timing comparison](docs/rosenbrock-16d-timings.png)
 
+*Created with the help of agentic coding tools.*
+
 This repository compares implementations of full-memory BFGS with a
 strong-Wolfe line search. Every optimizer implements the shared `Bfgs`
 interface and returns the same batched result fields, making correctness and
