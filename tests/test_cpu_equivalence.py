@@ -2,6 +2,7 @@
 
 import torch
 
+from batched_bfgs.chunked import ChunkedVectorizedBfgs
 from batched_bfgs.loop import LoopBfgs
 from batched_bfgs.models import BfgsConfig, OptimizationResult
 from batched_bfgs.objective import (
@@ -67,9 +68,18 @@ class TestCpuEquivalence:
         config = BfgsConfig(tolerance=1e-7, max_iterations=200)
         loop = LoopBfgs(config, objective).run(starts)
         vectorized = VectorizedBfgs(config, objective).run(starts)
+        chunked = ChunkedVectorizedBfgs(config, objective).run(starts)
         self._assert_equivalent(
             loop,
             vectorized,
+            initial,
+            torch.ones_like(starts),
+            position_tolerance=1e-4,
+            equivalence_tolerance=1e-4,
+        )
+        self._assert_equivalent(
+            loop,
+            chunked,
             initial,
             torch.ones_like(starts),
             position_tolerance=1e-4,
@@ -85,9 +95,18 @@ class TestCpuEquivalence:
         config = BfgsConfig(tolerance=1e-6, max_iterations=300)
         loop = LoopBfgs(config, objective).run(starts)
         vectorized = VectorizedBfgs(config, objective).run(starts)
+        chunked = ChunkedVectorizedBfgs(config, objective).run(starts)
         self._assert_equivalent(
             loop,
             vectorized,
+            initial,
+            torch.zeros_like(starts),
+            position_tolerance=1e-2,
+            equivalence_tolerance=2e-2,
+        )
+        self._assert_equivalent(
+            loop,
+            chunked,
             initial,
             torch.zeros_like(starts),
             position_tolerance=1e-2,
@@ -101,7 +120,11 @@ class TestCpuEquivalence:
             torch.zeros((0, 4), dtype=torch.float64),
             torch.zeros((4, 0), dtype=torch.float64),
         ):
-            for implementation in (LoopBfgs(config), VectorizedBfgs(config)):
+            for implementation in (
+                LoopBfgs(config),
+                VectorizedBfgs(config),
+                ChunkedVectorizedBfgs(config),
+            ):
                 try:
                     implementation.run(starts)
                 except ValueError as error:

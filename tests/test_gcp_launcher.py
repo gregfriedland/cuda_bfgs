@@ -65,4 +65,14 @@ class TestGcpLauncher:
         assert '"extended_powell|16"' in runner
         assert "--objective" in runner
         assert "--dimension" in runner
+        assert "--state_file" in runner
+        assert "timing-state.json" in runner
         assert "WantedBy=multi-user.target" in service
+
+    def test_benchmark_labels_both_pytorch_implementations(self) -> None:
+        """Reports distinguish naive and chunked PyTorch implementations."""
+        root = Path(__file__).resolve().parents[1]
+        benchmark = (root / "src/batched_bfgs/benchmark.py").read_text()
+
+        assert 'PYTORCH_NAIVE = "pytorch (naive)"' in benchmark
+        assert 'PYTORCH_CHUNKED = "pytorch (chunked)"' in benchmark

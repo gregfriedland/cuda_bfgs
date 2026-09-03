@@ -6,10 +6,12 @@ import statistics
 import time
 from collections.abc import Callable
 from enum import Enum, StrEnum
+from pathlib import Path
 from typing import Any
 
 import torch
 
+from batched_bfgs.chunked import ChunkedVectorizedBfgs
 from batched_bfgs.cuda import CudaBfgs
 from batched_bfgs.loop import LoopBfgs
 from batched_bfgs.models import BfgsConfig, OptimizationResult
@@ -18,6 +20,7 @@ from batched_bfgs.objective import (
     ExtendedRosenbrockObjective,
     TensorObjective,
 )
+from batched_bfgs.timing_cache import TimingCache, TimingConfiguration
 from batched_bfgs.vectorized import VectorizedBfgs
 
 
@@ -25,7 +28,8 @@ class Implementation(Enum):
     """Available BFGS execution strategies."""
 
     PYTHON_LOOP = "python_loop"
-    PYTORCH_BATCHED = "pytorch_batched"
+    PYTORCH_NAIVE = "pytorch (naive)"
+    PYTORCH_CHUNKED = "pytorch (chunked)"
     CUDA_KERNEL = "cuda_kernel"
 
 
@@ -98,7 +102,11 @@ class BenchmarkRunner:
         self._objective_name = objective_name
         self._dimension = dimension
         self._loop_max_batch = loop_max_batch
-        self._config = BfgsConfig(max_iterations=300)
+        self._correctness_config = BfgsConfig(max_iterations=300)
+        self._timing_config = BfgsConfig(
+            tolerance=1e-4,
+            max_iterations=300,
+        )
         self._objective = ObjectiveFactory.create(objective_name)
         ObjectiveFactory.make_starts(
             objective_name,
@@ -108,25 +116,49 @@ class BenchmarkRunner:
             torch.float64,
         )
 
-    def run(self, device: torch.device) -> dict[str, Any]:
+    def run(
+        self,
+        device: torch.device,
+        state_path: Path | None = None,
+    ) -> dict[str, Any]:
         """Run correctness checks followed by timing."""
         if device.type == "cuda" and not torch.cuda.is_available():
             raise ValueError("CUDA was requested but is unavailable")
-        cuda = self._cuda_implementation(device)
-        correctness = self._check_correctness(device, cuda)
+        correctness_cuda = self._cuda_implementation(
+            device,
+            self._correctness_config,
+        )
+        correctness = self._check_correctness(device, correctness_cuda)
+        cuda = self._cuda_implementation(device, self._timing_config)
+        cache = TimingCache(state_path) if state_path is not None else None
+        planned = self._planned_timings(device, cuda)
+        if cache is not None:
+            cache.initialize(
+                [
+                    (configuration, implementation is not None)
+                    for configuration, implementation, _starts in planned
+                ],
+            )
         records: list[dict[str, Any]] = []
-        for batch_size in self._batch_sizes:
-            starts = self.make_starts(batch_size, device, torch.float32)
-            implementations = self._implementations(cuda, batch_size)
-            for name, implementation in implementations.items():
-                records.append(
-                    self._time_implementation(name, implementation, starts),
-                )
+        for configuration, implementation, starts in planned:
+            if implementation is None:
+                continue
+            cached = cache.timing(configuration) if cache is not None else None
+            timing = cached or self._time_implementation(
+                configuration.implementation,
+                implementation,
+                starts,
+            )
+            if cache is not None and cached is None:
+                cache.record(configuration, timing)
+            records.append(timing)
         return {
             "device": self._device_name(device),
             "torch_version": torch.__version__,
             "objective": self._objective_name.value,
             "dimension": self._dimension,
+            "timing_dtype": "float32",
+            "timing_tolerance": self._timing_config.tolerance,
             "cuda_kernel_included": cuda is not None,
             "cuda_kernel_constraint": None
             if cuda is not None
@@ -137,6 +169,40 @@ class BenchmarkRunner:
             "correctness": correctness,
             "timings": records,
         }
+
+    def _planned_timings(
+        self,
+        device: torch.device,
+        cuda: CudaBfgs | None,
+    ) -> list[
+        tuple[
+            TimingConfiguration,
+            Callable[[torch.Tensor], OptimizationResult] | None,
+            torch.Tensor,
+        ]
+    ]:
+        """Create the complete desired and skipped timing matrix."""
+        planned = []
+        device_name = self._device_name(device)
+        for batch_size in self._batch_sizes:
+            starts = self.make_starts(batch_size, device, torch.float32)
+            implementations = self._implementations(cuda, batch_size)
+            for implementation_name in Implementation:
+                name = implementation_name.value
+                configuration = TimingConfiguration(
+                    objective=self._objective_name.value,
+                    dimension=self._dimension,
+                    implementation=name,
+                    batch_size=batch_size,
+                    device=device_name,
+                    dtype="float32",
+                    tolerance=self._timing_config.tolerance,
+                    repeats=self._repeats,
+                )
+                planned.append(
+                    (configuration, implementations.get(name), starts)
+                )
+        return planned
 
     def make_starts(
         self,
@@ -153,7 +219,11 @@ class BenchmarkRunner:
             dtype,
         )
 
-    def _cuda_implementation(self, device: torch.device) -> CudaBfgs | None:
+    def _cuda_implementation(
+        self,
+        device: torch.device,
+        config: BfgsConfig,
+    ) -> CudaBfgs | None:
         compatible = device.type == "cuda" and (
             self._dimension == 16
             or (
@@ -163,7 +233,7 @@ class BenchmarkRunner:
         )
         if not compatible:
             return None
-        cuda = CudaBfgs(self._config, self._objective_name.value)
+        cuda = CudaBfgs(config, self._objective_name.value)
         cuda.compile(verbose=False)
         return cuda
 
@@ -174,11 +244,19 @@ class BenchmarkRunner:
     ) -> dict[str, Any]:
         starts = self.make_starts(16, device, torch.float64)
         initial, _gradient = self._objective.value_and_gradient(starts)
-        loop = LoopBfgs(self._config, self._objective).run(starts)
-        vectorized = VectorizedBfgs(self._config, self._objective).run(starts)
+        loop = LoopBfgs(self._correctness_config, self._objective).run(starts)
+        vectorized = VectorizedBfgs(
+            self._correctness_config,
+            self._objective,
+        ).run(starts)
+        chunked = ChunkedVectorizedBfgs(
+            self._correctness_config,
+            self._objective,
+        ).run(starts)
         results = [
             (Implementation.PYTHON_LOOP.value, loop),
-            (Implementation.PYTORCH_BATCHED.value, vectorized),
+            (Implementation.PYTORCH_NAIVE.value, vectorized),
+            (Implementation.PYTORCH_CHUNKED.value, chunked),
         ]
         if cuda is not None:
             results.append((Implementation.CUDA_KERNEL.value, cuda.run(starts)))
@@ -211,6 +289,16 @@ class BenchmarkRunner:
             rtol=equivalence_tolerance,
         )
         maximum_error = float((vectorized.x - loop.x).abs().amax())
+        torch.testing.assert_close(
+            chunked.x,
+            loop.x,
+            atol=equivalence_tolerance,
+            rtol=equivalence_tolerance,
+        )
+        maximum_error = max(
+            maximum_error,
+            float((chunked.x - loop.x).abs().amax()),
+        )
         if cuda is not None:
             kernel = results[-1][1]
             torch.testing.assert_close(
@@ -237,8 +325,12 @@ class BenchmarkRunner:
         batch_size: int,
     ) -> dict[str, Callable[[torch.Tensor], OptimizationResult]]:
         implementations = {
-            Implementation.PYTORCH_BATCHED.value: VectorizedBfgs(
-                self._config,
+            Implementation.PYTORCH_NAIVE.value: VectorizedBfgs(
+                self._timing_config,
+                self._objective,
+            ).run,
+            Implementation.PYTORCH_CHUNKED.value: ChunkedVectorizedBfgs(
+                self._timing_config,
                 self._objective,
             ).run,
         }
@@ -246,7 +338,7 @@ class BenchmarkRunner:
             implementations[Implementation.CUDA_KERNEL.value] = cuda.run
         if batch_size <= self._loop_max_batch:
             implementations[Implementation.PYTHON_LOOP.value] = LoopBfgs(
-                self._config,
+                self._timing_config,
                 self._objective,
             ).run
         return implementations
@@ -346,13 +438,14 @@ class BenchmarkCli:
         )
         parser.add_argument("--dimension", type=int, default=16)
         parser.add_argument("--device", default="cuda")
+        parser.add_argument("--state_file", type=Path)
         arguments = parser.parse_args()
         report = BenchmarkRunner(
             batch_sizes=arguments.batch_sizes,
             repeats=arguments.repeats,
             objective_name=arguments.objective,
             dimension=arguments.dimension,
-        ).run(torch.device(arguments.device))
+        ).run(torch.device(arguments.device), arguments.state_file)
         print(json.dumps(report, indent=2, sort_keys=True))
 
 

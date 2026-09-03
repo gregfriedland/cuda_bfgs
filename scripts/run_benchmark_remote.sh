@@ -41,6 +41,7 @@ printf '{"attempt":%d,"boot_id":"%s","commit":"%s","pid":%d,"started_at":"%s"}\n
 mv "$running_tmp" "$state_dir/RUNNING.json"
 
 report_tmp="$state_dir/.report.json.tmp"
+timing_state="$state_dir/timing-state.json"
 benchmark_cases=(
     "extended_rosenbrock|2"
     "extended_rosenbrock|16"
@@ -57,6 +58,7 @@ for benchmark_case in "${benchmark_cases[@]}"; do
         --repeats 5 \
         --objective "$objective" \
         --dimension "$dimension" \
+        --state_file "$timing_state" \
         --device cuda >"$case_report" 2>>"$log_path"
     printf '%s' "$separator" >>"$report_tmp"
     cat "$case_report" >>"$report_tmp"
