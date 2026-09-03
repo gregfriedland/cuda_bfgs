@@ -18,7 +18,9 @@ call a Python objective callback.
 .venv/bin/python -m pytest -q tests/test_cpu_equivalence.py
 ```
 
-## Static checks
+## Local and remote CI checks
+
+### Local checks
 
 The shared check script creates or updates `.venv` from `uv.lock`, then runs
 Ruff linting, Ruff's formatting check, and ty type checking:
@@ -33,7 +35,17 @@ Enable the tracked pre-push hook once per clone:
 git config core.hooksPath .githooks
 ```
 
-The same script runs in GitHub Actions for pushes and pull requests.
+### Remote checks
+
+GitHub Actions runs the same `./scripts/check.sh` command for every push and
+pull request. View the workflow and its results on the
+[Static checks Actions page](https://github.com/gregfriedland/cuda_bfgs/actions/workflows/static-checks.yml).
+
+To inspect recent runs from the command line:
+
+```bash
+gh run list --workflow static-checks.yml --limit 5
+```
 
 The local machine does not need CUDA for the CPU equivalence test. The complete
 three-way benchmark requires a CUDA development environment:
@@ -48,24 +60,29 @@ JIT extension compilation and the warmup call are excluded from measured CUDA
 event timings. The Python-loop baseline is capped at batch size 256 because it
 intentionally measures per-member Python and kernel-launch overhead.
 
-## Flyte submission
+## GCP Spot VM
 
-The standalone task uses public `flyte`, `torch`, and Kubernetes APIs. It does
-not import from the Rezo monorepo. Its pod template pins one full
-`g4-standard-48` node in `atlas-east5`.
-
-```bash
-PYTHONPATH=src .venv/bin/python -m batched_bfgs.submit \
-  --run_dir "$PWD/run_260902_g4_benchmark"
-```
-
-The submission command records each run before returning and reuses a recorded
-active run. After diagnosing a failed run, pass `--resume` to submit a linked
-replacement within the three-attempt retry budget.
-
-The standalone bounded waiter accepts the execution ID returned by submission:
+Create a full-GPU `g4-standard-48` Spot VM. The launcher defaults to project
+`muziq-501806`, region `us-east5`, and the authenticated gcloud account
+`greg.friedland@gmail.com`. It discovers a zone in the requested region where
+the machine type is advertised; pass `--zone` to choose one explicitly.
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m batched_bfgs.wait RUN_ID \
-  --status_file "$PWD/run_260902_g4_benchmark/status/RUN_ID.json"
+./scripts/create_g4_spot_vm.sh \
+  --project muziq-501806 \
+  --region us-east5
 ```
+
+The VM uses a 200 GB Hyperdisk Balanced boot disk and Ubuntu 24.04. A startup
+script installs the current production NVIDIA driver. Spot preemption deletes
+the VM and its auto-delete boot disk, so do not keep unique results there.
+
+Preview all create arguments without provisioning a VM:
+
+```bash
+./scripts/create_g4_spot_vm.sh --zone us-east5-a --dry-run
+```
+
+The launcher requires an existing gcloud credential for the selected account
+and access to the selected project. Authenticate with
+`gcloud auth login greg.friedland@gmail.com` if the credential is absent.
