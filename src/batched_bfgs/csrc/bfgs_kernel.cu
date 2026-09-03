@@ -455,6 +455,48 @@ void launch_kernel(
       max_zoom_iterations);
 }
 
+template <typename scalar_t>
+void dispatch_kernel(
+    const torch::Tensor& starts,
+    torch::Tensor& output_x,
+    torch::Tensor& output_value,
+    torch::Tensor& output_gradient,
+    torch::Tensor& output_iterations,
+    torch::Tensor& output_evaluations,
+    torch::Tensor& output_converged,
+    torch::Tensor& output_wolfe,
+    std::int64_t objective,
+    scalar_t c1,
+    scalar_t c2,
+    scalar_t tolerance,
+    scalar_t step_tolerance,
+    scalar_t curvature_epsilon,
+    scalar_t initial_step,
+    scalar_t maximum_step,
+    int max_iterations,
+    int max_bracket_iterations,
+    int max_zoom_iterations) {
+  if (starts.size(1) == 2) {
+    launch_kernel<scalar_t, 2, ExtendedRosenbrock>(
+        starts, output_x, output_value, output_gradient, output_iterations,
+        output_evaluations, output_converged, output_wolfe, c1, c2, tolerance,
+        step_tolerance, curvature_epsilon, initial_step, maximum_step,
+        max_iterations, max_bracket_iterations, max_zoom_iterations);
+  } else if (objective == 0) {
+    launch_kernel<scalar_t, 16, ExtendedRosenbrock>(
+        starts, output_x, output_value, output_gradient, output_iterations,
+        output_evaluations, output_converged, output_wolfe, c1, c2, tolerance,
+        step_tolerance, curvature_epsilon, initial_step, maximum_step,
+        max_iterations, max_bracket_iterations, max_zoom_iterations);
+  } else {
+    launch_kernel<scalar_t, 16, ExtendedPowell>(
+        starts, output_x, output_value, output_gradient, output_iterations,
+        output_evaluations, output_converged, output_wolfe, c1, c2, tolerance,
+        step_tolerance, curvature_epsilon, initial_step, maximum_step,
+        max_iterations, max_bracket_iterations, max_zoom_iterations);
+  }
+}
+
 }  // namespace
 
 std::vector<torch::Tensor> optimize_cuda(
@@ -489,23 +531,14 @@ std::vector<torch::Tensor> optimize_cuda(
         static_cast<scalar_t>(curvature_epsilon);
     const auto scalar_initial_step = static_cast<scalar_t>(initial_step);
     const auto scalar_maximum_step = static_cast<scalar_t>(maximum_step);
-#define LAUNCH(dimension, objective_type)                                      \
-    launch_kernel<scalar_t, dimension, objective_type>(                        \
-        starts, output_x, output_value, output_gradient, output_iterations,    \
-        output_evaluations, output_converged, output_wolfe, scalar_c1,         \
-        scalar_c2, scalar_tolerance, scalar_step_tolerance,                    \
-        scalar_curvature_epsilon, scalar_initial_step, scalar_maximum_step,    \
-        static_cast<int>(max_iterations),                                      \
-        static_cast<int>(max_bracket_iterations),                              \
-        static_cast<int>(max_zoom_iterations))
-    if (starts.size(1) == 2) {
-      LAUNCH(2, ExtendedRosenbrock);
-    } else if (objective == 0) {
-      LAUNCH(16, ExtendedRosenbrock);
-    } else {
-      LAUNCH(16, ExtendedPowell);
-    }
-#undef LAUNCH
+    dispatch_kernel<scalar_t>(
+        starts, output_x, output_value, output_gradient, output_iterations,
+        output_evaluations, output_converged, output_wolfe, objective,
+        scalar_c1, scalar_c2, scalar_tolerance, scalar_step_tolerance,
+        scalar_curvature_epsilon, scalar_initial_step, scalar_maximum_step,
+        static_cast<int>(max_iterations),
+        static_cast<int>(max_bracket_iterations),
+        static_cast<int>(max_zoom_iterations));
   });
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {
