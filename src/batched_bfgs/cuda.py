@@ -54,7 +54,7 @@ class CudaBfgs:
                 str(source_dir / "bfgs_kernel.cu"),
             ],
             extra_cflags=["-O3"],
-            extra_cuda_cflags=["-O3", "--lineinfo"],
+            extra_cuda_cflags=["-O3", "-lineinfo"],
             with_cuda=True,
             verbose=verbose,
         )

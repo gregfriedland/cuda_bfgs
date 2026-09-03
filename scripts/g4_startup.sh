@@ -19,14 +19,16 @@ record_failure() {
 trap record_failure ERR
 
 if [[ -f "$ready_file" ]] && nvidia-smi >/dev/null 2>&1 && \
-    [[ -x /usr/local/cuda-12.8/bin/nvcc ]]; then
+    [[ -x /usr/local/cuda-12.8/bin/nvcc ]] && \
+    [[ -f /usr/include/python3.12/Python.h ]]; then
     exit 0
 fi
 rm -f "$ready_file" "$failed_file"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install --yes build-essential ca-certificates curl python3
+apt-get install --yes \
+    build-essential ca-certificates curl python3 python3.12-dev
 
 installer_dir=/opt/google/cuda-installer
 install -d -m 0755 "$installer_dir"
