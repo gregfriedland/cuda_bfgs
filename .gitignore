@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.pyright/
+*.egg-info/
+build/
+dist/
+run_*/logs/*.log
+run_*/status/*.json
+docs/ubiquitin_amber19_implementation_plan.md
