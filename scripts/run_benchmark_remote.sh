@@ -51,7 +51,7 @@ separator=""
 for benchmark_case in "${benchmark_cases[@]}"; do
     IFS='|' read -r objective dimension <<<"$benchmark_case"
     case_report="$state_dir/.${objective}-${dimension}d.json.tmp"
-    PATH="/usr/local/cuda-12.8/bin:$PATH" \
+    PATH="$PWD/.venv/bin:/usr/local/cuda-12.8/bin:$PATH" \
         .venv/bin/python -m batched_bfgs.benchmark \
         --batch-sizes 64 256 4096 65536 \
         --repeats 5 \
