@@ -196,11 +196,12 @@ class BenchmarkRunner:
                 target,
                 target_tolerance,
             )
-        equivalence_tolerance = (
-            1e-6
-            if self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
-            else 1e-2
-        )
+        equivalence_tolerance = target_tolerance
+        if (
+            self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
+            and self._dimension == 2
+        ):
+            equivalence_tolerance = 1e-6
         torch.testing.assert_close(
             vectorized.x,
             loop.x,

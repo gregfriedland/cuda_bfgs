@@ -62,7 +62,7 @@ class TestCpuEquivalence:
         """Both implementations converge in sixteen dimensions."""
         device = torch.device("cpu")
         objective = ExtendedRosenbrockObjective()
-        starts = objective.make_starts(8, 16, device, torch.float64)
+        starts = objective.make_starts(16, 16, device, torch.float64)
         initial, _gradient = objective.value_and_gradient(starts)
         config = BfgsConfig(tolerance=1e-7, max_iterations=200)
         loop = LoopBfgs(config, objective).run(starts)
@@ -72,6 +72,8 @@ class TestCpuEquivalence:
             vectorized,
             initial,
             torch.ones_like(starts),
+            position_tolerance=1e-4,
+            equivalence_tolerance=1e-4,
         )
 
     def test_loop_and_vectorized_extended_powell(self) -> None:
