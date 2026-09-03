@@ -164,7 +164,7 @@ class BenchmarkRunner:
         if not compatible:
             return None
         cuda = CudaBfgs(self._config, self._objective_name.value)
-        cuda.compile()
+        cuda.compile(verbose=False)
         return cuda
 
     def _check_correctness(
