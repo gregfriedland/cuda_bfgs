@@ -6,11 +6,11 @@ This repository implements full BFGS with a strong-Wolfe line search using:
 2. Masked batched PyTorch tensor operations.
 3. One fused fixed-dimensional optimization per CUDA thread.
 
-The Python and PyTorch implementations accept arbitrary-dimensional analytic
-objectives. Included benchmarks are extended Rosenbrock, defined as independent
+The only benchmark objectives are extended Rosenbrock, defined as independent
 two-variable blocks, and extended Powell singular, defined as independent
-four-variable blocks. The fused CUDA extension supports 2D Rosenbrock plus
-16D extended Rosenbrock and extended Powell through compiled objective kernels.
+four-variable blocks. The Python and PyTorch implementations accept arbitrary
+valid dimensions. The fused CUDA extension supports 2D Rosenbrock plus 16D
+extended Rosenbrock and extended Powell through compiled objective kernels.
 
 ## Local setup
 
