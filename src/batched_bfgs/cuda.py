@@ -11,7 +11,7 @@ from batched_bfgs.models import BfgsConfig, OptimizationResult
 
 
 class CudaBfgs:
-    """Run one complete two-dimensional BFGS optimization per CUDA thread."""
+    """Run one fused 2D Rosenbrock optimization per CUDA thread."""
 
     def __init__(self, config: BfgsConfig) -> None:
         """Initialize the optimizer without compiling the extension.

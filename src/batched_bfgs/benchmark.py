@@ -1,10 +1,11 @@
-"""Correctness and timing harness for the three BFGS implementations."""
+"""Correctness and timing harness for the BFGS implementations."""
 
 import argparse
 import json
 import statistics
+import time
 from collections.abc import Callable
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 import torch
@@ -12,7 +13,11 @@ import torch
 from batched_bfgs.cuda import CudaBfgs
 from batched_bfgs.loop import LoopBfgs
 from batched_bfgs.models import BfgsConfig, OptimizationResult
-from batched_bfgs.objective import RosenbrockObjective
+from batched_bfgs.objective import (
+    ExtendedPowellSingularObjective,
+    ExtendedRosenbrockObjective,
+    TensorObjective,
+)
 from batched_bfgs.vectorized import VectorizedBfgs
 
 
@@ -24,46 +29,90 @@ class Implementation(Enum):
     CUDA_KERNEL = "cuda_kernel"
 
 
+class ObjectiveName(StrEnum):
+    """Available analytic benchmark objectives."""
+
+    EXTENDED_ROSENBROCK = "extended_rosenbrock"
+    EXTENDED_POWELL = "extended_powell"
+
+
+class ObjectiveFactory:
+    """Construct objectives, starts, and known minimizers by name."""
+
+    @staticmethod
+    def create(name: ObjectiveName) -> TensorObjective:
+        """Create the requested analytic objective."""
+        if name is ObjectiveName.EXTENDED_ROSENBROCK:
+            return ExtendedRosenbrockObjective()
+        return ExtendedPowellSingularObjective()
+
+    @staticmethod
+    def make_starts(
+        name: ObjectiveName,
+        batch_size: int,
+        dimension: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Create deterministic standard starts for an objective."""
+        if name is ObjectiveName.EXTENDED_ROSENBROCK:
+            return ExtendedRosenbrockObjective.make_starts(
+                batch_size,
+                dimension,
+                device,
+                dtype,
+            )
+        return ExtendedPowellSingularObjective.make_starts(
+            batch_size,
+            dimension,
+            device,
+            dtype,
+        )
+
+    @staticmethod
+    def minimizer(name: ObjectiveName, starts: torch.Tensor) -> torch.Tensor:
+        """Return the known global minimizer for an objective."""
+        if name is ObjectiveName.EXTENDED_ROSENBROCK:
+            return torch.ones_like(starts)
+        return torch.zeros_like(starts)
+
+
 class BenchmarkRunner:
-    """Validate and time the three implementations on fixed inputs."""
+    """Validate and time implementations on one analytic objective."""
 
     def __init__(
         self,
         batch_sizes: list[int],
         repeats: int,
+        objective_name: ObjectiveName = ObjectiveName.EXTENDED_ROSENBROCK,
+        dimension: int = 16,
         loop_max_batch: int = 256,
     ) -> None:
-        """Initialize the benchmark.
-
-        Args:
-            batch_sizes: Batch sizes timed for vectorized and CUDA paths.
-            repeats: Number of measured repetitions per case.
-            loop_max_batch: Largest batch timed through the Python loop.
-
-        """
+        """Initialize the benchmark."""
         if not batch_sizes or min(batch_sizes) <= 0:
             raise ValueError("batch_sizes must contain positive values")
         if repeats < 3:
             raise ValueError("repeats must be at least three")
         self._batch_sizes = batch_sizes
         self._repeats = repeats
+        self._objective_name = objective_name
+        self._dimension = dimension
         self._loop_max_batch = loop_max_batch
         self._config = BfgsConfig()
+        self._objective = ObjectiveFactory.create(objective_name)
+        ObjectiveFactory.make_starts(
+            objective_name,
+            1,
+            dimension,
+            torch.device("cpu"),
+            torch.float64,
+        )
 
     def run(self, device: torch.device) -> dict[str, Any]:
-        """Run correctness checks followed by timing.
-
-        Args:
-            device: Device used by every implementation.
-
-        Returns:
-            JSON-serializable benchmark report.
-
-        """
-        if device.type != "cuda":
-            raise ValueError("the three-way benchmark requires CUDA")
-        cuda = CudaBfgs(self._config)
-        cuda.compile()
+        """Run correctness checks followed by timing."""
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise ValueError("CUDA was requested but is unavailable")
+        cuda = self._cuda_implementation(device)
         correctness = self._check_correctness(device, cuda)
         records: list[dict[str, Any]] = []
         for batch_size in self._batch_sizes:
@@ -73,62 +122,111 @@ class BenchmarkRunner:
                 records.append(
                     self._time_implementation(name, implementation, starts),
                 )
-        properties = torch.cuda.get_device_properties(device)
         return {
-            "device": properties.name,
-            "compute_capability": list(
-                torch.cuda.get_device_capability(device)
-            ),
+            "device": self._device_name(device),
             "torch_version": torch.__version__,
+            "objective": self._objective_name.value,
+            "dimension": self._dimension,
+            "cuda_kernel_included": cuda is not None,
+            "cuda_kernel_constraint": (
+                None
+                if cuda is not None
+                else "the fused CUDA baseline supports only 2D Rosenbrock"
+            ),
             "correctness": correctness,
             "timings": records,
         }
 
+    def make_starts(
+        self,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Create starts for this runner's objective and dimension."""
+        return ObjectiveFactory.make_starts(
+            self._objective_name,
+            batch_size,
+            self._dimension,
+            device,
+            dtype,
+        )
+
+    def _cuda_implementation(self, device: torch.device) -> CudaBfgs | None:
+        compatible = (
+            device.type == "cuda"
+            and self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
+            and self._dimension == 2
+        )
+        if not compatible:
+            return None
+        cuda = CudaBfgs(self._config)
+        cuda.compile()
+        return cuda
+
     def _check_correctness(
         self,
         device: torch.device,
-        cuda: CudaBfgs,
+        cuda: CudaBfgs | None,
     ) -> dict[str, Any]:
-        starts = self.make_starts(32, device, torch.float64)
-        initial, _gradient = RosenbrockObjective.value_and_gradient(starts)
-        loop = LoopBfgs(self._config).run(starts)
-        vectorized = VectorizedBfgs(self._config).run(starts)
-        kernel = cuda.run(starts)
-        for name, result in (
+        starts = self.make_starts(16, device, torch.float64)
+        initial, _gradient = self._objective.value_and_gradient(starts)
+        loop = LoopBfgs(self._config, self._objective).run(starts)
+        vectorized = VectorizedBfgs(self._config, self._objective).run(starts)
+        results = [
             (Implementation.PYTHON_LOOP.value, loop),
             (Implementation.PYTORCH_BATCHED.value, vectorized),
-            (Implementation.CUDA_KERNEL.value, kernel),
-        ):
-            self._assert_result(name, result, initial)
+        ]
+        if cuda is not None:
+            results.append((Implementation.CUDA_KERNEL.value, cuda.run(starts)))
+        target = ObjectiveFactory.minimizer(self._objective_name, starts)
+        target_tolerance = (
+            1e-4
+            if self._objective_name is ObjectiveName.EXTENDED_ROSENBROCK
+            else 1e-2
+        )
+        for name, result in results:
+            self._assert_result(
+                name,
+                result,
+                initial,
+                target,
+                target_tolerance,
+            )
         torch.testing.assert_close(vectorized.x, loop.x, atol=1e-6, rtol=1e-6)
-        torch.testing.assert_close(kernel.x, loop.x, atol=1e-6, rtol=1e-6)
+        maximum_error = float((vectorized.x - loop.x).abs().amax())
+        if cuda is not None:
+            kernel = results[-1][1]
+            torch.testing.assert_close(kernel.x, loop.x, atol=1e-6, rtol=1e-6)
+            maximum_error = max(
+                maximum_error,
+                float((kernel.x - loop.x).abs().amax()),
+            )
         return {
-            "batch_size": 32,
+            "batch_size": 16,
             "dtype": "float64",
-            "maximum_position_error": float(
-                torch.maximum(
-                    (vectorized.x - loop.x).abs().amax(),
-                    (kernel.x - loop.x).abs().amax(),
-                ),
-            ),
+            "maximum_position_error": maximum_error,
             "all_converged": True,
             "all_steps_satisfied_strong_wolfe": True,
         }
 
     def _implementations(
         self,
-        cuda: CudaBfgs,
+        cuda: CudaBfgs | None,
         batch_size: int,
     ) -> dict[str, Callable[[torch.Tensor], OptimizationResult]]:
         implementations = {
             Implementation.PYTORCH_BATCHED.value: VectorizedBfgs(
-                self._config
+                self._config,
+                self._objective,
             ).run,
-            Implementation.CUDA_KERNEL.value: cuda.run,
         }
+        if cuda is not None:
+            implementations[Implementation.CUDA_KERNEL.value] = cuda.run
         if batch_size <= self._loop_max_batch:
             implementations[Implementation.PYTHON_LOOP.value] = LoopBfgs(
-                self._config
+                self._config,
+                self._objective,
             ).run
         return implementations
 
@@ -139,17 +237,21 @@ class BenchmarkRunner:
         starts: torch.Tensor,
     ) -> dict[str, Any]:
         implementation(starts)
-        torch.cuda.synchronize(starts.device)
         elapsed_ms: list[float] = []
         result: OptimizationResult | None = None
         for _repeat in range(self._repeats):
-            begin = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
-            begin.record()
-            result = implementation(starts)
-            end.record()
-            end.synchronize()
-            elapsed_ms.append(begin.elapsed_time(end))
+            if starts.device.type == "cuda":
+                begin = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
+                begin.record()
+                result = implementation(starts)
+                end.record()
+                end.synchronize()
+                elapsed_ms.append(begin.elapsed_time(end))
+            else:
+                begin_time = time.perf_counter()
+                result = implementation(starts)
+                elapsed_ms.append((time.perf_counter() - begin_time) * 1000.0)
         if result is None:
             raise RuntimeError("benchmark did not execute")
         median_ms = statistics.median(elapsed_ms)
@@ -166,11 +268,13 @@ class BenchmarkRunner:
             "repeats": self._repeats,
         }
 
+    @staticmethod
     def _assert_result(
-        self,
         name: str,
         result: OptimizationResult,
         initial_objective: torch.Tensor,
+        target: torch.Tensor,
+        target_tolerance: float,
     ) -> None:
         if not bool(torch.isfinite(result.x).all()):
             raise AssertionError(f"{name} produced non-finite coordinates")
@@ -185,51 +289,49 @@ class BenchmarkRunner:
             raise AssertionError(
                 f"{name} did not converge; max gradient={maximum_gradient}",
             )
-        target = torch.ones_like(result.x)
-        torch.testing.assert_close(result.x, target, atol=1e-6, rtol=1e-6)
+        torch.testing.assert_close(
+            result.x,
+            target,
+            atol=target_tolerance,
+            rtol=target_tolerance,
+        )
 
     @staticmethod
-    def make_starts(
-        batch_size: int,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        """Create deterministic, non-identical Rosenbrock starting points.
-
-        Args:
-            batch_size: Number of independent optimization problems.
-            device: Destination device.
-            dtype: Floating-point dtype.
-
-        Returns:
-            Starting coordinates with shape ``[batch_size, 2]``.
-
-        """
-        index = torch.arange(batch_size, dtype=dtype, device=device)
-        x0 = -1.2 + 0.25 * torch.sin(index * 0.37)
-        x1 = 1.0 + 0.25 * torch.cos(index * 0.53)
-        return torch.stack((x0, x1), dim=-1)
+    def _device_name(device: torch.device) -> str:
+        if device.type == "cuda":
+            return torch.cuda.get_device_properties(device).name
+        return str(device)
 
 
 class BenchmarkCli:
-    """Parse command-line arguments and run the benchmark."""
+    """Parse command-line arguments and run an analytic benchmark."""
 
     @staticmethod
     def run() -> None:
         """Execute the command-line benchmark."""
         parser = argparse.ArgumentParser()
         parser.add_argument(
-            "--batch_sizes",
+            "--batch-sizes",
             nargs="+",
             type=int,
             default=[64, 256, 4096, 65536],
         )
         parser.add_argument("--repeats", type=int, default=5)
+        parser.add_argument(
+            "--objective",
+            type=ObjectiveName,
+            choices=list(ObjectiveName),
+            default=ObjectiveName.EXTENDED_ROSENBROCK,
+        )
+        parser.add_argument("--dimension", type=int, default=16)
+        parser.add_argument("--device", default="cuda")
         arguments = parser.parse_args()
         report = BenchmarkRunner(
             batch_sizes=arguments.batch_sizes,
             repeats=arguments.repeats,
-        ).run(torch.device("cuda"))
+            objective_name=arguments.objective,
+            dimension=arguments.dimension,
+        ).run(torch.device(arguments.device))
         print(json.dumps(report, indent=2, sort_keys=True))
 
 

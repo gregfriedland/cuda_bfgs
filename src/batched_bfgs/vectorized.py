@@ -7,39 +7,45 @@ from batched_bfgs.models import (
     BfgsConfig,
     OptimizationResult,
 )
-from batched_bfgs.objective import RosenbrockObjective
+from batched_bfgs.objective import ExtendedRosenbrockObjective, TensorObjective
 
 
 class VectorizedBfgs:
     """Optimize a batch through masked tensor operations."""
 
-    def __init__(self, config: BfgsConfig) -> None:
+    def __init__(
+        self,
+        config: BfgsConfig,
+        objective: TensorObjective | None = None,
+    ) -> None:
         """Initialize the optimizer.
 
         Args:
             config: Shared numerical configuration.
+            objective: Objective and analytic gradient evaluator.
 
         """
         self._config = config
+        self._objective = objective or ExtendedRosenbrockObjective()
 
     @torch.no_grad()
     def run(self, starts: torch.Tensor) -> OptimizationResult:
         """Optimize all starts with batched tensor operations.
 
         Args:
-            starts: Initial coordinates with shape ``[batch, 2]``.
+            starts: Initial coordinates with shape ``[batch, dimension]``.
 
         Returns:
             One optimization result per batch member.
 
         """
-        if starts.ndim != 2 or starts.shape[1] != 2:
-            raise ValueError("starts must have shape [batch, 2]")
+        if starts.ndim != 2 or starts.shape[0] == 0 or starts.shape[1] == 0:
+            raise ValueError("starts must have shape [batch, dimension]")
         x = starts.clone()
-        batch = x.shape[0]
-        identity = torch.eye(2, dtype=x.dtype, device=x.device)
+        batch, dimension = x.shape
+        identity = torch.eye(dimension, dtype=x.dtype, device=x.device)
         hessian = identity.expand(batch, -1, -1).clone()
-        objective, gradient = RosenbrockObjective.value_and_gradient(x)
+        objective, gradient = self._objective.value_and_gradient(x)
         iterations = torch.zeros(batch, dtype=torch.int32, device=x.device)
         evaluations = torch.zeros_like(iterations)
         converged = self._norm(gradient) <= self._config.tolerance
@@ -378,15 +384,15 @@ class VectorizedBfgs:
         usable &= candidate < upper - guard
         return torch.where(usable, candidate, midpoint)
 
-    @staticmethod
     def _evaluate(
+        self,
         x: torch.Tensor,
         direction: torch.Tensor,
         step: torch.Tensor,
         active: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         safe_step = torch.where(active, step, torch.zeros_like(step))
-        return RosenbrockObjective.value_and_gradient(
+        return self._objective.value_and_gradient(
             x + safe_step[:, None] * direction,
         )
 

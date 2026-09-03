@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Purpose: Run the GPU benchmark with durable attempt and terminal-state markers.
+# Usage: Launched on the G4 VM by bfgs-benchmark.service; do not run locally.
 
 set -euo pipefail
 
@@ -39,10 +41,29 @@ printf '{"attempt":%d,"boot_id":"%s","commit":"%s","pid":%d,"started_at":"%s"}\n
 mv "$running_tmp" "$state_dir/RUNNING.json"
 
 report_tmp="$state_dir/.report.json.tmp"
-PATH="/usr/local/cuda-12.8/bin:$PATH" \
-    .venv/bin/python -m batched_bfgs.benchmark \
-    --batch_sizes 64 256 4096 65536 \
-    --repeats 5 >"$report_tmp" 2>"$log_path"
+benchmark_cases=(
+    "extended_rosenbrock|2"
+    "extended_rosenbrock|16"
+    "extended_powell|16"
+)
+printf '{\n  "benchmarks": [\n' >"$report_tmp"
+separator=""
+for benchmark_case in "${benchmark_cases[@]}"; do
+    IFS='|' read -r objective dimension <<<"$benchmark_case"
+    case_report="$state_dir/.${objective}-${dimension}d.json.tmp"
+    PATH="/usr/local/cuda-12.8/bin:$PATH" \
+        .venv/bin/python -m batched_bfgs.benchmark \
+        --batch-sizes 64 256 4096 65536 \
+        --repeats 5 \
+        --objective "$objective" \
+        --dimension "$dimension" \
+        --device cuda >"$case_report" 2>>"$log_path"
+    printf '%s' "$separator" >>"$report_tmp"
+    cat "$case_report" >>"$report_tmp"
+    rm "$case_report"
+    separator=$',\n'
+done
+printf '\n  ]\n}\n' >>"$report_tmp"
 .venv/bin/python -m json.tool "$report_tmp" >/dev/null
 mv "$report_tmp" "$state_dir/report.json"
 

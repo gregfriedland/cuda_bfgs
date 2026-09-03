@@ -9,34 +9,40 @@ from batched_bfgs.models import (
     OptimizationResult,
     ScalarLineSearchResult,
 )
-from batched_bfgs.objective import RosenbrockObjective
+from batched_bfgs.objective import ExtendedRosenbrockObjective, TensorObjective
 
 
 class LoopBfgs:
     """Optimize each batch member through explicit Python control flow."""
 
-    def __init__(self, config: BfgsConfig) -> None:
+    def __init__(
+        self,
+        config: BfgsConfig,
+        objective: TensorObjective | None = None,
+    ) -> None:
         """Initialize the optimizer.
 
         Args:
             config: Shared numerical configuration.
+            objective: Objective and analytic gradient evaluator.
 
         """
         self._config = config
+        self._objective = objective or ExtendedRosenbrockObjective()
 
     @torch.no_grad()
     def run(self, starts: torch.Tensor) -> OptimizationResult:
         """Optimize all starts sequentially.
 
         Args:
-            starts: Initial coordinates with shape ``[batch, 2]``.
+            starts: Initial coordinates with shape ``[batch, dimension]``.
 
         Returns:
             One optimization result per batch member.
 
         """
-        if starts.ndim != 2 or starts.shape[1] != 2:
-            raise ValueError("starts must have shape [batch, 2]")
+        if starts.ndim != 2 or starts.shape[0] == 0 or starts.shape[1] == 0:
+            raise ValueError("starts must have shape [batch, dimension]")
         members = [self._optimize_one(start) for start in starts]
         fields = zip(*members, strict=True)
         stacked = [torch.stack(tuple(values)) for values in fields]
@@ -44,8 +50,9 @@ class LoopBfgs:
 
     def _optimize_one(self, start: torch.Tensor) -> OptimizationResult:
         x = start.clone()
-        hessian = torch.eye(2, dtype=x.dtype, device=x.device)
-        objective, gradient = RosenbrockObjective.value_and_gradient(x)
+        dimension = x.shape[0]
+        hessian = torch.eye(dimension, dtype=x.dtype, device=x.device)
+        objective, gradient = self._objective.value_and_gradient(x)
         iterations = 0
         evaluations = 0
         wolfe_satisfied = True
@@ -55,7 +62,11 @@ class LoopBfgs:
                 break
             direction = -(hessian @ gradient)
             if float(torch.dot(gradient, direction)) >= 0.0:
-                hessian = torch.eye(2, dtype=x.dtype, device=x.device)
+                hessian = torch.eye(
+                    dimension,
+                    dtype=x.dtype,
+                    device=x.device,
+                )
                 direction = -gradient
             line = self._strong_wolfe(x, objective, gradient, direction)
             evaluations += line.evaluations
@@ -243,13 +254,13 @@ class LoopBfgs:
             return midpoint
         return candidate
 
-    @staticmethod
     def _evaluate(
+        self,
         x: torch.Tensor,
         direction: torch.Tensor,
         step: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        return RosenbrockObjective.value_and_gradient(x + step * direction)
+        return self._objective.value_and_gradient(x + step * direction)
 
     def _update_hessian(
         self,
@@ -263,7 +274,11 @@ class LoopBfgs:
         if float(curvature) <= float(threshold):
             return hessian
         rho = curvature.reciprocal()
-        identity = torch.eye(2, dtype=step.dtype, device=step.device)
+        identity = torch.eye(
+            step.shape[0],
+            dtype=step.dtype,
+            device=step.device,
+        )
         left = identity - rho * torch.outer(step, change)
         return left @ hessian @ left.T + rho * torch.outer(step, step)
 
